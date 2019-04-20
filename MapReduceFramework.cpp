@@ -2,12 +2,12 @@
 #include "Barrier.h"
 #include "MapReduceClient.h"
 
-struct ThreadContext {
+struct ThreadContext{
     std::atomic<int>* atomic_counter;
-    std::vector<std::pair<K2*, V2*>>& mapRes; // Keeps the results of the map stage.
     const InputVec& inputVec;
     MapReduceClient& client;
     Barrier& barrier;
+    IntermediateVec mapRes; // Keeps the results of the map stage.
 };
 
 /**
@@ -16,7 +16,7 @@ struct ThreadContext {
  * @param arg
  * @return
  */
-void* mapSort(void* arg){
+static void* mapSort(void* arg){
     auto* tc = (ThreadContext*) arg;
     K1* currElmKey;
     V1* currElmVal;
@@ -31,10 +31,21 @@ void* mapSort(void* arg){
         (tc->client).map(currElmKey, currElmVal, tc);
     }
 
-    // Sort the elements in the Map stage result:
+    // Sorts the elements in the result of the Map stage:
+    std::sort(tc->mapRes.begin(), tc->mapRes.end());
 
     // Forces the thread to wait until all the others have finished the Sort phase.
     tc->barrier.barrier();
 
     return 0;
+}
+
+
+void emit2 (K2* key, V2* value, void* context){
+    // Converting context to the right type:
+    auto* tc = (ThreadContext*) context;
+
+    // Inserting the map result to mapRes:
+    tc->mapRes.push_back(IntermediatePair(key, value));
+
 }
