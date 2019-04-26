@@ -21,6 +21,7 @@ struct ThreadContext {
     const MapReduceClient* client;
     Barrier* barrier;
     pthread_mutex_t* inputMutex; // Used to lock the input vector when needed.
+    pthread_mutex_t* jobStateMutex;
     IntermediateVec mapRes; // Keeps the results of the map stage.
 };
 
@@ -49,7 +50,6 @@ struct JobContext {
 
 //----------------------------------------------- STATIC GLOBALS ------------------------------------------------//
 static JobContext* jc;
-int globInt = 0;
 //---------------------------------------------- STATIC FUNCTIONS ------------------------------------------------//
 
 /**
@@ -113,7 +113,13 @@ static void* mapSort(void *arg) {
     // While there are elements to map, map them and keep the results in mapRes.
     while (notDone) {
         (tc->client)->map(currElmKey, currElmVal, tc);
+
         // Update JobState
+        lock(tc->jobStateMutex, tc->id);
+        jc->state.percentage += (100.0 / (tc->inputVec)->size());
+        unlock(tc->jobStateMutex, tc->id);
+
+        // Get the next input element:
         lock(tc->inputMutex, tc->id);
         old_value = (*(tc->atomicCounter))++;
         if(old_value < (tc->inputVec)->size()){
@@ -171,7 +177,9 @@ void waitForJob(JobHandle job) {
 }
 
 void getJobState(JobHandle job, JobState *state) {
-
+    auto *context = (JobContext *) job;
+    state->percentage = context->state.percentage;
+    state->stage = context->state.stage;
 }
 
 void closeJobHandle(JobHandle job) {
@@ -189,9 +197,10 @@ JobHandle startMapReduceJob(const MapReduceClient &client,
     std::atomic<int> atomicCounter(0);
     Barrier barrier(multiThreadLevel);
     pthread_mutex_t inputMutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_t jobThreadMutex = PTHREAD_MUTEX_INITIALIZER;
 
     for (int i = 0; i < multiThreadLevel; ++i) {
-        ThreadContext context{i, &atomicCounter, &inputVec, &client, &barrier, &inputMutex};
+        ThreadContext context{i, &atomicCounter, &inputVec, &client, &barrier, &inputMutex, &jobThreadMutex};
         jc->contexts.at(i) = context;
     }
 
@@ -208,3 +217,14 @@ JobHandle startMapReduceJob(const MapReduceClient &client,
     }
     return jc;
 }
+
+
+
+// TESTS
+
+//// A test for getJobState & percentage updating:
+//JobState test;
+//while(test.percentage < 100){
+//getJobState(jc, &test);
+//std::cout << test.percentage << std::endl;
+//}
