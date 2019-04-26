@@ -1,6 +1,5 @@
-// TODO: clean JobContext memory.
 // TODO: Do we need to change the stage to undefined when sorting/ shuffling? Do we need to update percentage somehow?
-// TODO: Treat errors.
+// TODO: Treat errors (Does exit(1) frees all of the resources?)
 // TODO: Do we need to secure the lib functions from multi threading? https://moodle2.cs.huji.ac.il/nu18/mod/forum/discuss.php?d=49877
 
 #include <string>
@@ -31,18 +30,19 @@ struct ThreadContext {
  * This struct holds all parameters relevant to the job.
  */
 struct JobContext {
+    int multiThreadLevel;
     std::vector<pthread_t> threads;
     std::vector<ThreadContext> contexts;
     JobState state{};
 
     /**
      * A constructor for the JobContext struct.
-     * @param multiThreadLevel
+     * @param threadNum
      * @param jobContext
      */
-    JobContext(int multiThreadLevel) {
-        std::vector<pthread_t> jobThreads(multiThreadLevel);
-        std::vector<ThreadContext> jobContexts(multiThreadLevel);
+    JobContext(int threadNum): multiThreadLevel(threadNum){
+        std::vector<pthread_t> jobThreads(threadNum);
+        std::vector<ThreadContext> jobContexts(threadNum);
         threads = jobThreads;
         contexts = jobContexts;
         state = {UNDEFINED_STAGE, 0};
@@ -135,7 +135,7 @@ static void* mapSort(void *arg) {
     }
 
     // Sorts the elements in the result of the Map stage:
-    std::sort(tc->mapRes.begin(), tc->mapRes.end(), intermediateComperator);
+    std::sort(tc->mapRes.begin(), tc->mapRes.end(), intermediateComperator); // TODO: Put in a try-catch block?
 
     // Forces the thread to wait until all the others have finished the Sort phase.
     tc->barrier->barrier();
@@ -154,7 +154,10 @@ static void initMappingThreads(int multiThreadLevel) {
     for (int i = 0; i < multiThreadLevel; ++i) {
         threadIndex = &((jc->threads).at(i));
         contextIndex = &((jc->contexts).at(i));
-        pthread_create(threadIndex, NULL, mapSort, contextIndex);
+        if(pthread_create(threadIndex, NULL, mapSort, contextIndex) != 0){
+            std::cerr << "error on creating thread " << i << std::endl;
+            exit(1);
+        }
     }
 }
 
@@ -163,20 +166,23 @@ static void initMappingThreads(int multiThreadLevel) {
 void emit2(K2 *key, V2 *value, void *context) {
     // Converting context to the right type:
     auto *tc = (ThreadContext *) context;
-    int forTestTid = tc->id;
 
     // Inserting the map result to mapRes:
     tc->mapRes.push_back(IntermediatePair(key, value));
-
 }
 
 void emit3(K3 *key, V3 *value, void *context) {
 
 }
 
-//void waitForJob(JobHandle job) {
-//    while
-//}
+void waitForJob(JobHandle job) {
+    auto *context = (JobContext *) job;
+    for (int i = 0; i < context->multiThreadLevel ; ++i) {
+        if(pthread_join(jc->threads[i], NULL) != 0){
+            std::cerr << "Error using pthread_join." << i << std::endl;
+        }
+    }
+}
 
 void getJobState(JobHandle job, JobState *state) {
     auto *context = (JobContext *) job;
@@ -185,6 +191,8 @@ void getJobState(JobHandle job, JobState *state) {
 }
 
 void closeJobHandle(JobHandle job) {
+    auto *context = (JobContext *) job;
+    delete(context);
 }
 
 JobHandle startMapReduceJob(const MapReduceClient &client,
@@ -214,9 +222,8 @@ JobHandle startMapReduceJob(const MapReduceClient &client,
     //-----------REDUCE----------------//
 
     // Wait for all of the threads to finish:
-    for (int i = 0; i < multiThreadLevel; ++i) {
-        pthread_join(jc->threads[i], NULL);
-    }
+    waitForJob(jc);
+    closeJobHandle(jc);
     return jc;
 }
 
