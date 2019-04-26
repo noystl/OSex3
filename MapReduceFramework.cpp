@@ -1,5 +1,7 @@
 // TODO: clean JobContext memory.
-// TODO: check what more sync problems could occur in map.
+// TODO: Do we need to change the stage to undefined when sorting/ shuffling? Do we need to update percentage somehow?
+// TODO: Treat errors.
+// TODO: Do we need to secure the lib functions from multi threading? https://moodle2.cs.huji.ac.il/nu18/mod/forum/discuss.php?d=49877
 
 #include <string>
 #include <iostream>
@@ -172,9 +174,9 @@ void emit3(K3 *key, V3 *value, void *context) {
 
 }
 
-void waitForJob(JobHandle job) {
-
-}
+//void waitForJob(JobHandle job) {
+//    while
+//}
 
 void getJobState(JobHandle job, JobState *state) {
     auto *context = (JobContext *) job;
