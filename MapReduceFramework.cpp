@@ -6,7 +6,9 @@
 #include "MapReduceFramework.h"
 #include "Barrier.h"
 #include "MapReduceClient.h"
-
+#include <atomic>
+#include <algorithm>
+#include <pthread.h>
 
 //-------------------------------------------- USEFUL STRUCTS --------------------------------------------------//
 /**
@@ -111,7 +113,7 @@ static void* mapSort(void *arg) {
     // While there are elements to map, map them and keep the results in mapRes.
     while (notDone) {
         (tc->client)->map(currElmKey, currElmVal, tc);
-
+        // Update JobState
         lock(tc->inputMutex, tc->id);
         old_value = (*(tc->atomicCounter))++;
         if(old_value < (tc->inputVec)->size()){
