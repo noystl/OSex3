@@ -1,6 +1,6 @@
-// TODO: Do we need to change the stage to undefined when sorting/ shuffling? Do we need to update percentage somehow?
 // TODO: Treat errors (Does exit(1) frees all of the resources?)
 // TODO: Do we need to secure the lib functions from multi threading? https://moodle2.cs.huji.ac.il/nu18/mod/forum/discuss.php?d=49877
+// TODO: How to update the state to reduce?
 
 #include <string>
 #include <iostream>
@@ -89,6 +89,18 @@ static bool intermediateComperator(const IntermediatePair& p1, const Intermediat
 }
 
 /**
+ * This method updates the percentage in the jobState struct.
+ * @param id
+ * @param size
+ * @param mutex
+ */
+static void updatePercentage(int id, int size, pthread_mutex_t* mutex){
+    lock(mutex, id);
+    jc->state.percentage += (100.0 / size);
+    unlock(mutex, id);
+}
+
+/**
  * This is the function each thread runs in the beginning of the Map-Reduce process. It handles the Map and Sort
  * stages, and locks the running thread until all of the rest have finished.
  * @param arg
@@ -101,7 +113,6 @@ static void* mapSort(void *arg) {
     bool notDone = false;
 
     // checks what is the index of the next element we should map:
-
     lock(tc->inputMutex, tc->id);
     int old_value = (*(tc->atomicCounter))++;
 
@@ -115,11 +126,7 @@ static void* mapSort(void *arg) {
     // While there are elements to map, map them and keep the results in mapRes.
     while (notDone) {
         (tc->client)->map(currElmKey, currElmVal, tc);
-
-        // Update JobState
-        lock(tc->jobStateMutex, tc->id);
-        jc->state.percentage += (100.0 / (tc->inputVec)->size());
-        unlock(tc->jobStateMutex, tc->id);
+        updatePercentage(tc->id, (tc->inputVec)->size(), tc->jobStateMutex);
 
         // Get the next input element:
         lock(tc->inputMutex, tc->id);
@@ -148,7 +155,7 @@ static void* mapSort(void *arg) {
  * @param multiThreadLevel
  * @param jc
  */
-static void initMappingThreads(int multiThreadLevel) {
+static void initThreads(int multiThreadLevel) {
     pthread_t *threadIndex;
     ThreadContext *contextIndex;
     for (int i = 0; i < multiThreadLevel; ++i) {
@@ -191,6 +198,7 @@ void getJobState(JobHandle job, JobState *state) {
 }
 
 void closeJobHandle(JobHandle job) {
+    waitForJob(job);
     auto *context = (JobContext *) job;
     delete(context);
 }
@@ -199,7 +207,6 @@ JobHandle startMapReduceJob(const MapReduceClient &client,
                             const InputVec &inputVec, OutputVec &outputVec,
                             int multiThreadLevel) {
 
-    //-----------INITIALIZE FRAMEWORK----------//
     //Initialize The JobContext:
     jc = new JobContext(multiThreadLevel);
 
@@ -214,16 +221,9 @@ JobHandle startMapReduceJob(const MapReduceClient &client,
         jc->contexts.at(i) = context;
     }
 
-    //-----------MAP & SORT------------//
+    // Start job:
     jc->state = {MAP_STAGE, 0};
-    initMappingThreads(multiThreadLevel);
-    //-----------SHUFFLE---------------//
-
-    //-----------REDUCE----------------//
-
-    // Wait for all of the threads to finish:
-    waitForJob(jc);
-    closeJobHandle(jc);
+    initThreads(multiThreadLevel);
     return jc;
 }
 
