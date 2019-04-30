@@ -46,7 +46,6 @@ public:
         for (int i = 0; i < 256; ++i) {
             if (counts[i] == 0)
                 continue;
-
             KChar* k2 = new KChar(i);
             VCount* v2 = new VCount(counts[i]);
             usleep(150000);
@@ -103,6 +102,8 @@ int main(int argc, char** argv)
 
     closeJobHandle(job);
 
+   // printf("Num of tuples: %lu\n", outputVec.size());
+
     for (OutputPair& pair: outputVec) {
         char c = ((const KChar*)pair.first)->c;
         int count = ((const VCount*)pair.second)->count;
@@ -114,4 +115,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-
