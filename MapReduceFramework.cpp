@@ -2,6 +2,7 @@
 //TODO: consider using [] instead of at()- else we should check foe out_of_bound exceptions.
 //      in addition, from what I saw in our code, it is safe to use operator[],
 //      and also this exercise is about productivity.
+// TODO: Handle empty input vector.
 
 #include <string>
 #include <iostream>
@@ -63,7 +64,7 @@ struct JobContext{
                         _client(client), _numOfWorkers(multiThreadLevel),
                         _numOfElements(inputVec->size()), _numOfProcessedElements(0),
                         _stage(UNDEFINED_STAGE), _doneShuffling(false),
-                        _atomicCounter(0), _barrier(multiThreadLevel),
+                        _atomicCounter(0), _barrier(multiThreadLevel), // Todo: can throw errors.
                         _inputVec(inputVec), _outputVec(outputVec)
     {
         // 2nd arg == 0 means that the semaphore can be used only by calling activity,
@@ -94,7 +95,7 @@ struct JobContext{
         if (pthread_mutex_destroy(&_processMutex)|| pthread_mutex_destroy(&_inputMutex)||
             pthread_mutex_destroy(&_queueMutex)|| pthread_mutex_destroy(&_outputMutex))
         {
-            std::cerr << "Error destroying Mutex." << std:: end;
+            std::cerr << "Error destroying Mutex." << std::endl;
             exit(1);
         }
     }
@@ -202,7 +203,7 @@ void mapSort(void *threadContext)
     }
 
     // Sorts the elements in the result of the Map stage:
-    std::sort(tc->_mapRes.begin(), tc->_mapRes.end(), intermediateComparator);
+    std::sort(tc->_mapRes.begin(), tc->_mapRes.end(), intermediateComparator);  //TODO: Put in a try catch block
 
     // Forces the thread to wait until all the others have finished the Sort phase.
     jc->_barrier.barrier();
@@ -341,6 +342,11 @@ static void* mapReduce(void *arg)
 static void initThreads() {
     pthread_t *threadIndex;
     ThreadContext *contextIndex;
+
+    lock(&jc->_processMutex);
+    jc->_stage = MAP_STAGE;
+    unlock(&jc->_processMutex);
+
     for (unsigned int i = 0; i < jc->_numOfWorkers; ++i) {
         threadIndex = &((jc->_threads).at(i));
         contextIndex = &((jc->_contexts).at(i));
@@ -350,9 +356,6 @@ static void initThreads() {
             exit(1);
         }
     }
-    lock(&jc->_processMutex);
-    jc->_stage = MAP_STAGE;
-    unlock(&jc->_processMutex);
 }
 
 //--------------------------------------------------PUBLIC METHODS--------------------------------------------------//
@@ -422,10 +425,10 @@ JobHandle startMapReduceJob(const MapReduceClient &client,
 
     //-----------INITIALIZE FRAMEWORK----------//
     //Initialize The JobContext:
-    auto* jc = new JobContext(&client, &inputVec, &outputVec, multiThreadLevel);
+    jc = new JobContext(&client, &inputVec, &outputVec, multiThreadLevel);
 
     //Initialize contexts for the threads:
-    for (unsigned int i = 0; i < multiThreadLevel; ++i) {
+    for (int i = 0; i < multiThreadLevel; ++i) {
         ThreadContext context{i};
         jc->_contexts.at(i) = context;
     }

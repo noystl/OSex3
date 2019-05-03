@@ -3,8 +3,8 @@
 #include <cstdio>
 
 Barrier::Barrier(int numThreads)
-        : mutex(PTHREAD_MUTEX_INITIALIZER)
-        , cv(PTHREAD_COND_INITIALIZER)
+        : mutex(PTHREAD_MUTEX_INITIALIZER) //TODO: Check initialization.
+        , cv(PTHREAD_COND_INITIALIZER) // TODO: check initialization.
         , count(0)
         , numThreads(numThreads)
 { }
