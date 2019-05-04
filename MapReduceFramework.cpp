@@ -1,5 +1,8 @@
-// TODO: clean JobContext memory: use sem_destroy
-// TODO: check what more sync problems could occur in map.
+//TODO for Noy: what if the comparator receives NULL? should check or is it done in the calling func(mapSort)?
+//TODO: consider using [] instead of at()- else we should check foe out_of_bound exceptions.
+//      in addition, from what I saw in our code, it is safe to use operator[],
+//      and also this exercise is about productivity.
+// TODO: Handle empty input vector.
 
 #include <string>
 #include <iostream>
@@ -10,6 +13,7 @@
 #include <algorithm>
 #include <pthread.h>
 #include <semaphore.h>
+#include <cassert>
 
 //-------------------------------------------- USEFUL STRUCTS --------------------------------------------------//
 /**
@@ -29,12 +33,14 @@ struct JobContext{
     const MapReduceClient* _client;
     int _numOfWorkers;
     unsigned long _numOfElements;
+
+    stage_t _stage;
     int _numOfProcessedElements;
     pthread_mutex_t _processMutex;
-    stage_t _stage;
+
     bool _doneShuffling;
 
-    std::atomic<int> _atomicCounter;
+    std::atomic<unsigned int> _atomicCounter;
     Barrier _barrier;
 
     const InputVec* _inputVec;
@@ -55,13 +61,11 @@ struct JobContext{
                         const InputVec* inputVec, OutputVec* outputVec,
                         int multiThreadLevel):
                         _threads(multiThreadLevel), _contexts(multiThreadLevel),
-                        _client(client), _numOfWorkers(multiThreadLevel), _numOfElements(inputVec->size()),
-                        _numOfProcessedElements(0), _processMutex(PTHREAD_MUTEX_INITIALIZER),
+                        _client(client), _numOfWorkers(multiThreadLevel),
+                        _numOfElements(inputVec->size()), _numOfProcessedElements(0),
                         _stage(UNDEFINED_STAGE), _doneShuffling(false),
-                        _atomicCounter(0), _barrier(multiThreadLevel),
-                        _inputVec(inputVec), _outputVec(outputVec),
-                        _inputMutex(PTHREAD_MUTEX_INITIALIZER), _queueMutex(PTHREAD_MUTEX_INITIALIZER),
-                        _outputMutex(PTHREAD_MUTEX_INITIALIZER)
+                        _atomicCounter(0), _barrier(multiThreadLevel), // Todo: can throw errors.
+                        _inputVec(inputVec), _outputVec(outputVec)
     {
         // 2nd arg == 0 means that the semaphore can be used only by calling activity,
         // 3rd arg is the initial value of the semaphore
@@ -70,27 +74,51 @@ struct JobContext{
             std::cerr << "Error using sem_init." << std::endl;
             exit(1);
         }
+
+        //TODO: needed? prior implementation didn't check for errors.
+        if (pthread_mutex_init(&_processMutex, nullptr) || pthread_mutex_init(&_inputMutex, nullptr)
+            || pthread_mutex_init(&_queueMutex, nullptr) || pthread_mutex_init(&_outputMutex, nullptr))
+        {
+            std::cerr << "Error initializing Mutex." << std::endl;
+            exit(1);
+        }
+    }
+
+    /**
+     * destructs this JobContext.
+     */
+    ~JobContext()
+    {
+        sem_destroy(&_queueSizeSem);
+
+        //TODO: needed? corresponding to the above TODO.
+        if (pthread_mutex_destroy(&_processMutex)|| pthread_mutex_destroy(&_inputMutex)||
+            pthread_mutex_destroy(&_queueMutex)|| pthread_mutex_destroy(&_outputMutex))
+        {
+            std::cerr << "Error destroying Mutex." << std::endl;
+            exit(1);
+        }
     }
 };
-
 
 //----------------------------------------------- STATIC GLOBALS ------------------------------------------------//
 static JobContext* jc;
 
 /** should be non-negative and < numOfThreads */
-static int shufflingThread = 3;
+static int shufflingThread = 0;
 
 //---------------------------------------------- STATIC FUNCTIONS ------------------------------------------------//
-
 
 /**
  * Locks the desired mutex.
  * @param mutex
  * @param tid
  */
-static void lock(pthread_mutex_t *mutex, int tid){
-    if (pthread_mutex_lock(mutex) != 0){
-        std::cerr << "thread " << tid << "error on pthread_mutex_lock" << std::endl;
+static void lock(pthread_mutex_t *mutex)
+{
+    if (pthread_mutex_lock(mutex) != 0)
+    {
+        std::cerr << "error on pthread_mutex_lock" << std::endl;
         exit(1);
     }
 }
@@ -100,9 +128,11 @@ static void lock(pthread_mutex_t *mutex, int tid){
  * @param mutex
  * @param tid
  */
-static void unlock(pthread_mutex_t *mutex, int tid){
-    if (pthread_mutex_unlock(mutex) != 0) {
-        std::cerr << "thread " << tid << "error on pthread_mutex_unlock" << std::endl;
+static void unlock(pthread_mutex_t *mutex)
+{
+    if (pthread_mutex_unlock(mutex) != 0)
+    {
+        std::cerr << "error on pthread_mutex_unlock" << std::endl;
         exit(1);
     }
 }
@@ -113,10 +143,11 @@ static void unlock(pthread_mutex_t *mutex, int tid){
  * @param size
  * @param mutex
  */
-static void updateProcess(int id, unsigned long processed, pthread_mutex_t* mutex){
-    lock(mutex, id);
+static void updateProcess(unsigned long processed, pthread_mutex_t* mutex)
+{
+    lock(mutex);
     jc->_numOfProcessedElements += processed;
-    unlock(mutex, id);
+    unlock(mutex);
 }
 
 /**
@@ -125,7 +156,8 @@ static void updateProcess(int id, unsigned long processed, pthread_mutex_t* mute
  * @param p2
  * @return
  */
-static bool intermediateComparator(const IntermediatePair& p1, const IntermediatePair& p2){
+static bool intermediateComparator(const IntermediatePair& p1, const IntermediatePair& p2)
+{
     return *(p1.first) < *(p2.first);
 }
 
@@ -137,28 +169,28 @@ static bool intermediateComparator(const IntermediatePair& p1, const Intermediat
 void mapSort(void *threadContext)
 {
     auto tc = (ThreadContext *)threadContext;
-    K1* currElmKey;
-    V1* currElmVal;
+    K1* currElmKey = nullptr;
+    V1* currElmVal = nullptr;
     bool notDone = false;
 
     // checks what is the index of the next element we should map:
-    lock(&jc->_inputMutex, tc->_id);
-    int old_value = (jc->_atomicCounter)++;
+    lock(&jc->_inputMutex);
+    unsigned int old_value = (jc->_atomicCounter)++;
 
     if(old_value < (jc->_inputVec)->size()){
         notDone = true;
         currElmKey = jc->_inputVec->at(old_value).first;
         currElmVal = jc->_inputVec->at(old_value).second;
     }
-    unlock(&jc->_inputMutex, tc->_id);
+    unlock(&jc->_inputMutex);
 
     // While there are elements to map, map them and keep the results in mapRes.
     while (notDone) {
         (jc->_client)->map(currElmKey, currElmVal, tc);
-        updateProcess(tc->_id, 1, &jc->_processMutex);
+        updateProcess(1, &jc->_processMutex);
 
         // Update JobState
-        lock(&jc->_inputMutex, tc->_id);
+        lock(&jc->_inputMutex);
         old_value = (jc->_atomicCounter)++;
         if(old_value < (jc->_inputVec)->size()){
             notDone = true;
@@ -167,11 +199,11 @@ void mapSort(void *threadContext)
         } else{
             notDone = false;
         }
-        unlock(&jc->_inputMutex, tc->_id);
+        unlock(&jc->_inputMutex);
     }
 
     // Sorts the elements in the result of the Map stage:
-    std::sort(tc->_mapRes.begin(), tc->_mapRes.end(), intermediateComparator);
+    std::sort(tc->_mapRes.begin(), tc->_mapRes.end(), intermediateComparator);  //TODO: Put in a try catch block
 
     // Forces the thread to wait until all the others have finished the Sort phase.
     jc->_barrier.barrier();
@@ -202,7 +234,8 @@ static void shuffle()
             if (!jc->_contexts[j]._mapRes.empty())
             {
                 K2 *currKey = jc->_contexts[j]._mapRes.back().first;
-                if (maxKey == nullptr || *maxKey < *currKey){
+                if (maxKey == nullptr || *maxKey < *currKey)
+                {
                     maxKey = currKey;
                 }
             }
@@ -211,30 +244,43 @@ static void shuffle()
         //pops all elements with the key, and adds them to the "toReduce" vector:
         for (int j = 0; j < jc->_numOfWorkers; ++j)
         {
-            auto c = jc->_contexts[j]._mapRes;
-
-            if (!jc->_contexts[j]._mapRes.empty() &&
-                !(*maxKey < *(c.back().first)) &&
-                !(*(c.back().first) < *maxKey))
+            assert (maxKey != nullptr);
+            while (!jc->_contexts[j]._mapRes.empty() &&
+                   !(*maxKey < *(jc->_contexts[j]._mapRes.back().first)) &&
+                   !(*(jc->_contexts[j]._mapRes.back().first) < *maxKey))
             {
-                toReduce.push_back(jc->_contexts[j]._mapRes.back());
+                try{
+                    toReduce.push_back(jc->_contexts[j]._mapRes.back());
+                }
+                catch (std::bad_alloc &e)
+                {
+                    std::cerr << "system error: couldn't add the pair to the toReduce vector." << std::endl;
+                    exit(1);
+                }
                 jc->_contexts[j]._mapRes.pop_back();
             }
         }
 
         //adds the vector to the queue & signal:
-        lock(&jc->_queueMutex, shufflingThread);
-        jc->_reducingQueue.push_back(toReduce);
-        unlock(&jc->_queueMutex, shufflingThread);
+        lock(&jc->_queueMutex);
+        try
+        {
+            jc->_reducingQueue.push_back(toReduce);
+        }
+        catch (std::bad_alloc &e)
+        {
+            std::cerr << "system error: couldn't add the vector to the reducing queue." << std::endl;
+            exit(1);
+        }
+        unlock(&jc->_queueMutex);
 
-        if(sem_post(&jc->_queueSizeSem))
+        if (sem_post(&jc->_queueSizeSem))
         {
             std::cerr << "Error using sem_post." << std::endl;
             exit(1);
         }
         moreToGo -= toReduce.size();
         toReduce.clear();
-
     }
 }
 
@@ -245,18 +291,22 @@ static void reduce(ThreadContext *tc)
 {
     while(!(jc->_doneShuffling && jc->_reducingQueue.empty()))
     {
-        sem_wait(&jc->_queueSizeSem);
 
-        lock(&jc->_queueMutex, tc->_id);
+        if (sem_wait(&jc->_queueSizeSem))
+        {
+            std::cerr << "Error using sem_wait." << std::endl;
+            exit(1);
+        }
+        lock(&jc->_queueMutex);
 
         //critical code:
         IntermediateVec pairs = jc->_reducingQueue.back();
         jc->_reducingQueue.pop_back();
 
-        unlock(&jc->_queueMutex, tc->_id);
+        unlock(&jc->_queueMutex);
 
         (jc->_client)->reduce(&pairs ,tc);
-        updateProcess(tc->_id, pairs.size(), &jc->_processMutex);
+        updateProcess(pairs.size(), &jc->_processMutex);
     }
 }
 
@@ -270,12 +320,13 @@ static void* mapReduce(void *arg)
     // ------shuffle:
     if (tc->_id == shufflingThread)
     {
+        lock(&jc->_processMutex);
+
+        //critical code:
         jc->_stage = REDUCE_STAGE;
-
-        lock(&jc->_processMutex, tc->_id);
         jc->_numOfProcessedElements = 0;
-        unlock(&jc->_processMutex, tc->_id);
 
+        unlock(&jc->_processMutex);
         shuffle();
         jc->_doneShuffling = true;
     }
@@ -291,7 +342,12 @@ static void* mapReduce(void *arg)
 static void initThreads() {
     pthread_t *threadIndex;
     ThreadContext *contextIndex;
-    for (int i = 0; i < jc->_numOfWorkers; ++i) {
+
+    lock(&jc->_processMutex);
+    jc->_stage = MAP_STAGE;
+    unlock(&jc->_processMutex);
+
+    for (unsigned int i = 0; i < jc->_numOfWorkers; ++i) {
         threadIndex = &((jc->_threads).at(i));
         contextIndex = &((jc->_contexts).at(i));
         if (pthread_create(threadIndex, nullptr, mapReduce, contextIndex))
@@ -300,7 +356,6 @@ static void initThreads() {
             exit(1);
         }
     }
-    jc->_stage = MAP_STAGE;
 }
 
 //--------------------------------------------------PUBLIC METHODS--------------------------------------------------//
@@ -309,18 +364,30 @@ void emit2(K2 *key, V2 *value, void *context) {
     auto *tc = (ThreadContext *) context;
 
     // Inserting the map result to mapRes:
-    tc->_mapRes.push_back(IntermediatePair(key, value));
+    try{
+        tc->_mapRes.push_back(IntermediatePair(key, value));
+    }
+    catch (std::bad_alloc &e)
+    {
+        std::cerr << "system error: couldn't add to the IntermediatePairs vector." << std::endl;
+        exit(1);
+    }
 }
 
 void emit3(K3 *key, V3 *value, void *context) {
     // Converting context to the right type:
-    auto *tc = (ThreadContext *) context;
-    lock(&jc->_outputMutex, tc->_id);
+    lock(&jc->_outputMutex);
 
     //critical code:
-    jc->_outputVec->push_back(OutputPair(key, value));
-
-    unlock(&jc->_outputMutex, tc->_id);
+    try{
+        jc->_outputVec->push_back(OutputPair(key, value));
+    }
+    catch (std::bad_alloc &e)
+    {
+        std::cerr << "system error: couldn't to the output vector." << std::endl;
+        exit(1);
+    }
+    unlock(&jc->_outputMutex);
 }
 
 void waitForJob(JobHandle job) {
@@ -335,8 +402,13 @@ void waitForJob(JobHandle job) {
 
 void getJobState(JobHandle job, JobState *state) {
     auto *context = (JobContext *) job;
+    lock(&jc->_processMutex);
+
+    //critical code:
     state->percentage = (float)(context->_numOfProcessedElements * (100.0 / context->_numOfElements));
     state->stage = context->_stage;
+
+    unlock(&jc->_processMutex);
 }
 
 void closeJobHandle(JobHandle job) {
@@ -348,6 +420,8 @@ void closeJobHandle(JobHandle job) {
 JobHandle startMapReduceJob(const MapReduceClient &client,
                             const InputVec &inputVec, OutputVec &outputVec,
                             int multiThreadLevel) {
+
+    assert(multiThreadLevel >= 0);
 
     //-----------INITIALIZE FRAMEWORK----------//
     //Initialize The JobContext:

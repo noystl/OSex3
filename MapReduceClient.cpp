@@ -102,7 +102,7 @@ int main(int argc, char** argv)
 
     closeJobHandle(job);
 
-   // printf("Num of tuples: %lu\n", outputVec.size());
+    printf("Num of tuples: %lu\n", outputVec.size());
 
     for (OutputPair& pair: outputVec) {
         char c = ((const KChar*)pair.first)->c;
