@@ -1,8 +1,4 @@
-//TODO for Noy: what if the comparator receives NULL? should check or is it done in the calling func(mapSort)?
-//TODO: consider using [] instead of at()- else we should check foe out_of_bound exceptions.
-//      in addition, from what I saw in our code, it is safe to use operator[],
-//      and also this exercise is about productivity.
-// TODO: Handle empty input vector.
+// TODO: We are exiting from a constructor - is that ok?
 
 #include <string>
 #include <iostream>
@@ -75,7 +71,6 @@ struct JobContext{
             exit(1);
         }
 
-        //TODO: needed? prior implementation didn't check for errors.
         if (pthread_mutex_init(&_processMutex, nullptr) || pthread_mutex_init(&_inputMutex, nullptr)
             || pthread_mutex_init(&_queueMutex, nullptr) || pthread_mutex_init(&_outputMutex, nullptr))
         {
@@ -91,7 +86,6 @@ struct JobContext{
     {
         sem_destroy(&_queueSizeSem);
 
-        //TODO: needed? corresponding to the above TODO.
         if (pthread_mutex_destroy(&_processMutex)|| pthread_mutex_destroy(&_inputMutex)||
             pthread_mutex_destroy(&_queueMutex)|| pthread_mutex_destroy(&_outputMutex))
         {
@@ -169,6 +163,7 @@ static bool intermediateComparator(const IntermediatePair& p1, const Intermediat
 void mapSort(void *threadContext)
 {
     auto tc = (ThreadContext *)threadContext;
+    InputPair currPair;
     K1* currElmKey = nullptr;
     V1* currElmVal = nullptr;
     bool notDone = false;
@@ -179,8 +174,9 @@ void mapSort(void *threadContext)
 
     if(old_value < (jc->_inputVec)->size()){
         notDone = true;
-        currElmKey = jc->_inputVec->at(old_value).first;
-        currElmVal = jc->_inputVec->at(old_value).second;
+        currPair = (*(jc->_inputVec))[old_value];
+        currElmKey = currPair.first;
+        currElmVal = currPair.second;
     }
     unlock(&jc->_inputMutex);
 
@@ -194,8 +190,9 @@ void mapSort(void *threadContext)
         old_value = (jc->_atomicCounter)++;
         if(old_value < (jc->_inputVec)->size()){
             notDone = true;
-            currElmKey = jc->_inputVec->at(old_value).first;
-            currElmVal = jc->_inputVec->at(old_value).second;
+            currPair = (*(jc->_inputVec))[old_value];
+            currElmKey = currPair.first;
+            currElmVal = currPair.second;
         } else{
             notDone = false;
         }
@@ -203,7 +200,14 @@ void mapSort(void *threadContext)
     }
 
     // Sorts the elements in the result of the Map stage:
-    std::sort(tc->_mapRes.begin(), tc->_mapRes.end(), intermediateComparator);  //TODO: Put in a try catch block
+    try{
+        std::sort(tc->_mapRes.begin(), tc->_mapRes.end(), intermediateComparator);
+    }
+    catch (std::bad_alloc &e)
+    {
+        std::cerr << "System Error: Sorting map results had failed." << std::endl;
+        exit(1);
+    }
 
     // Forces the thread to wait until all the others have finished the Sort phase.
     jc->_barrier.barrier();
@@ -223,7 +227,7 @@ static void shuffle()
     {
         moreToGo += jc->_contexts[j]._mapRes.size();
     }
-    jc->_numOfElements = moreToGo;
+    jc->_numOfElements = moreToGo; // TODO: Verify with bar that this is safe, just in case.
 
     while (moreToGo > 0)
     {
@@ -348,8 +352,8 @@ static void initThreads() {
     unlock(&jc->_processMutex);
 
     for (unsigned int i = 0; i < jc->_numOfWorkers; ++i) {
-        threadIndex = &((jc->_threads).at(i));
-        contextIndex = &((jc->_contexts).at(i));
+        threadIndex = &((jc->_threads)[i]);
+        contextIndex = &((jc->_contexts)[i]);
         if (pthread_create(threadIndex, nullptr, mapReduce, contextIndex))
         {
             std::cerr << "Error using pthread_create, on thread " << i << std::endl;
@@ -392,28 +396,46 @@ void emit3(K3 *key, V3 *value, void *context) {
 
 void waitForJob(JobHandle job) {
     auto *context = (JobContext *) job;
-    for (int i = 0; i < context->_numOfWorkers; ++i) {
-        if(pthread_join(jc->_threads[i], nullptr)){
-            std::cerr << "Error using pthread_join." << i << std::endl;
-            exit(1);
+
+    // If there are no elements to proceed the job is as good as done, and need no waiting for.
+    if(!context->_inputVec->empty()){
+        for (int i = 0; i < context->_numOfWorkers; ++i) {
+            if(pthread_join(jc->_threads[i], nullptr)){
+                std::cerr << "Error using pthread_join." << i << std::endl;
+                exit(1);
+            }
         }
     }
 }
 
 void getJobState(JobHandle job, JobState *state) {
     auto *context = (JobContext *) job;
-    lock(&jc->_processMutex);
+    if(!(context->_inputVec->empty())){
+        lock(&jc->_processMutex);
 
-    //critical code:
-    state->percentage = (float)(context->_numOfProcessedElements * (100.0 / context->_numOfElements));
-    state->stage = context->_stage;
+        //critical code:
+        state->percentage = (float)(context->_numOfProcessedElements * (100.0 / context->_numOfElements));
+        state->stage = context->_stage;
 
-    unlock(&jc->_processMutex);
+        unlock(&jc->_processMutex);
+    }
+
+    else {
+        // If there are no elements to proceed, the job is good as done:
+        lock(&jc->_processMutex);
+
+        //critical code:
+        state->percentage = 100;
+        state->stage = REDUCE_STAGE;
+
+        unlock(&jc->_processMutex);
+    }
+
 }
 
 void closeJobHandle(JobHandle job) {
-    waitForJob(job);
     auto *context = (JobContext *) job;
+    waitForJob(job);
     delete(context);
 }
 
@@ -423,17 +445,18 @@ JobHandle startMapReduceJob(const MapReduceClient &client,
 
     assert(multiThreadLevel >= 0);
 
-    //-----------INITIALIZE FRAMEWORK----------//
     //Initialize The JobContext:
     jc = new JobContext(&client, &inputVec, &outputVec, multiThreadLevel);
 
-    //Initialize contexts for the threads:
-    for (int i = 0; i < multiThreadLevel; ++i) {
-        ThreadContext context{i};
-        jc->_contexts.at(i) = context;
-    }
+    if(!inputVec.empty()){
+        //Initialize contexts for the threads:
+        for (int i = 0; i < multiThreadLevel; ++i) {
+            ThreadContext context{i};
+            (jc->_contexts)[i] = context;
+        }
 
-    initThreads();
+        initThreads();
+    }
 
     return jc;
 }

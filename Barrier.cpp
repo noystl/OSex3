@@ -1,13 +1,16 @@
 #include "Barrier.h"
 #include <cstdlib>
 #include <cstdio>
+#include <iostream>
 
 Barrier::Barrier(int numThreads)
-        : mutex(PTHREAD_MUTEX_INITIALIZER) //TODO: Check initialization.
-        , cv(PTHREAD_COND_INITIALIZER) // TODO: check initialization.
-        , count(0)
-        , numThreads(numThreads)
-{ }
+        : count(0) , numThreads(numThreads)
+{
+    if(pthread_mutex_init(&mutex, NULL) != 0 || pthread_cond_init(&cv, NULL) != 0){
+        std::cerr << "System Error: An error had occurred while initializing Barrier." << std::endl;
+        exit(1);
+    }
+}
 
 
 Barrier::~Barrier()
