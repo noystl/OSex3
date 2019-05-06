@@ -12,27 +12,41 @@
 #include <cassert>
 
 //-------------------------------------------- USEFUL STRUCTS --------------------------------------------------//
+
+
 /**
- * This struct holds the inner data of a thread.
+ * This struct holds all parameters relevant to the thread.
  */
-struct ThreadContext{
+struct ThreadContext
+{
     int _id;
+    int _jid;
+    pthread_t _thread;
     IntermediateVec _mapRes; // Keeps the results of the map stage.
+
+    /**
+     * constructs a new thread context object
+     * @param tid: the thread's id
+     * @param jid : the id of the job to which the thread in connected
+     * @param threadObj: the thread
+     */
+    ThreadContext(int tid, int jid):_id(tid), _jid(jid){}
 };
 
 /**
  * This struct holds all parameters relevant to the job.
  */
 struct JobContext{
-    std::vector<pthread_t> _threads;
-    std::vector<ThreadContext> _contexts;
+    int _jid;
+
+    std::vector<ThreadContext*> _contexts;
     const MapReduceClient* _client;
     int _numOfWorkers;
-    unsigned long _numOfElements;
+    long _numOfElements;
 
     stage_t _stage;
     int _numOfProcessedElements;
-    pthread_mutex_t _processMutex;
+    pthread_mutex_t _stateMutex;
 
     bool _doneShuffling;
 
@@ -48,30 +62,32 @@ struct JobContext{
     pthread_mutex_t _outputMutex; //Used to lock the output vector
 
 
-    /**
-     * A constructor for the JobContext struct.
-     * @param multiThreadLevel
-     * @param jobContext
-     */
-    JobContext(const MapReduceClient* client,
+     /**
+      * A constructor for the JobContext struct.
+      * @param jid: the job's id
+      * @param client: the job's client
+      * @param inputVec : the job's input
+      * @param outputVec : the place for the job to output to.
+      * @param multiThreadLevel: the job's multi thread level.
+      */
+    JobContext(int jid, const MapReduceClient* client,
                         const InputVec* inputVec, OutputVec* outputVec,
                         int multiThreadLevel):
-                        _threads(multiThreadLevel), _contexts(multiThreadLevel),
+                        _jid(jid),_contexts(multiThreadLevel),
                         _client(client), _numOfWorkers(multiThreadLevel),
-                        _numOfElements(inputVec->size()), _numOfProcessedElements(0),
-                        _stage(UNDEFINED_STAGE), _doneShuffling(false),
-                        _atomicCounter(0), _barrier(multiThreadLevel), // Todo: can throw errors.
+                        _numOfElements(inputVec->size()),_stage(UNDEFINED_STAGE),
+                        _numOfProcessedElements(0), _doneShuffling(false),
+                        _atomicCounter(0), _barrier(multiThreadLevel),
                         _inputVec(inputVec), _outputVec(outputVec)
     {
-        // 2nd arg == 0 means that the semaphore can be used only by calling activity,
-        // 3rd arg is the initial value of the semaphore
+
         if (sem_init(&_queueSizeSem, 0, 0))
         {
             std::cerr << "Error using sem_init." << std::endl;
             exit(1);
         }
 
-        if (pthread_mutex_init(&_processMutex, nullptr) || pthread_mutex_init(&_inputMutex, nullptr)
+        if (pthread_mutex_init(&_stateMutex, nullptr) || pthread_mutex_init(&_inputMutex, nullptr)
             || pthread_mutex_init(&_queueMutex, nullptr) || pthread_mutex_init(&_outputMutex, nullptr))
         {
             std::cerr << "Error initializing Mutex." << std::endl;
@@ -86,7 +102,7 @@ struct JobContext{
     {
         sem_destroy(&_queueSizeSem);
 
-        if (pthread_mutex_destroy(&_processMutex)|| pthread_mutex_destroy(&_inputMutex)||
+        if (pthread_mutex_destroy(&_stateMutex)|| pthread_mutex_destroy(&_inputMutex)||
             pthread_mutex_destroy(&_queueMutex)|| pthread_mutex_destroy(&_outputMutex))
         {
             std::cerr << "Error destroying Mutex." << std::endl;
@@ -95,8 +111,14 @@ struct JobContext{
     }
 };
 
+
+
 //----------------------------------------------- STATIC GLOBALS ------------------------------------------------//
-static JobContext* jc;
+/** holds the library's jobs*/
+static std::vector<JobContext*> jobs;
+
+/** locks the job's vector */
+static pthread_mutex_t jobsVecMutex = PTHREAD_MUTEX_INITIALIZER; // TODO: how to initialize safely? When to destroy? Should we destroy it?
 
 /** should be non-negative and < numOfThreads */
 static int shufflingThread = 0;
@@ -105,8 +127,7 @@ static int shufflingThread = 0;
 
 /**
  * Locks the desired mutex.
- * @param mutex
- * @param tid
+ * @param mutex: the mutex to lock
  */
 static void lock(pthread_mutex_t *mutex)
 {
@@ -119,8 +140,7 @@ static void lock(pthread_mutex_t *mutex)
 
 /**
  * Unlocks the desired mutex.
- * @param mutex
- * @param tid
+ * @param mutex: the mutex to unlock
  */
 static void unlock(pthread_mutex_t *mutex)
 {
@@ -133,17 +153,18 @@ static void unlock(pthread_mutex_t *mutex)
 
 /**
  * This method updates the percentage in the jobState struct.
- * @param id
- * @param size
- * @param mutex
+ * @param jc: the job'x context
+ * @param processed: the number of processed elements to update
  */
-static void updateProcess(unsigned long processed, pthread_mutex_t* mutex)
+static void updateProcess(JobContext* jc, unsigned long processed)
 {
-    lock(mutex);
+    lock(&jc->_stateMutex);
     jc->_numOfProcessedElements += processed;
-    unlock(mutex);
+    unlock(&jc->_stateMutex);
 }
 
+
+//TODO: start document from HERE
 /**
  * Compares between two intermediate pairs.
  * @param p1
@@ -160,9 +181,9 @@ static bool intermediateComparator(const IntermediatePair& p1, const Intermediat
  * stages, and locks the running thread until all of the rest have finished.
  * @param tc
  */
-void mapSort(void *threadContext)
+void mapSort(ThreadContext * tc)
 {
-    auto tc = (ThreadContext *)threadContext;
+    JobContext *jc = jobs[tc->_jid];
     InputPair currPair;
     K1* currElmKey = nullptr;
     V1* currElmVal = nullptr;
@@ -183,7 +204,7 @@ void mapSort(void *threadContext)
     // While there are elements to map, map them and keep the results in mapRes.
     while (notDone) {
         (jc->_client)->map(currElmKey, currElmVal, tc);
-        updateProcess(1, &jc->_processMutex);
+        updateProcess(jc, 1);
 
         // Update JobState
         lock(&jc->_inputMutex);
@@ -213,11 +234,48 @@ void mapSort(void *threadContext)
     jc->_barrier.barrier();
 }
 
+//// TO BAR: This is a midwork version of the map without the lock. (not done and not tested yet)
+//static void* mapSort(ThreadContext * tc){
+//    JobContext *jc = jobs[tc->_jid];
+//    InputPair currPair;
+//    K1* currElmKey = nullptr;
+//    V1* currElmVal = nullptr;
+//
+//    // checks what is the index of the next element we should map:
+//    unsigned int old_value = (jc->_atomicCounter)++;
+//    currPair = (*(jc->_inputVec))[old_value];
+//    currElmKey = currPair.first;
+//    currElmVal = currPair.second;
+//
+//    // While there are elements to map, map them and keep the results in mapRes.
+//    while (old_value < (jc->_inputVec)->size()) {
+//        (jc->_client)->map(currElmKey, currElmVal, tc);
+//        updateProcess(jc, 1);
+//    }
+//
+//    // Sorts the elements in the result of the Map stage:
+//    try{
+//        std::sort(tc->_mapRes.begin(), tc->_mapRes.end(), intermediateComparator);
+//    }
+//    catch (std::bad_alloc &e)
+//    {
+//        std::cerr << "System Error: Sorting map results had failed." << std::endl;
+//        exit(1);
+//    }
+//
+//    // Forces the thread to wait until all the others have finished the Sort phase.
+//    jc->_barrier.barrier();
+//
+//    return 0;
+//}
+
 /**
  * The shuffling functionality
  */
-static void shuffle()
+static void shuffle(ThreadContext* tc)
 {
+
+    JobContext *jc = jobs[tc->_jid];
     K2 *maxKey;
     IntermediateVec toReduce;
     unsigned int moreToGo = 0;
@@ -225,9 +283,9 @@ static void shuffle()
     //set moreToGo & _numOfElements:
     for (int j = 0; j < jc->_numOfWorkers; ++j)
     {
-        moreToGo += jc->_contexts[j]._mapRes.size();
+        moreToGo += jc->_contexts[j]->_mapRes.size();
     }
-    jc->_numOfElements = moreToGo; // TODO: Verify with bar that this is safe, just in case.
+    jc->_numOfElements = moreToGo;
 
     while (moreToGo > 0)
     {
@@ -235,9 +293,9 @@ static void shuffle()
         maxKey = nullptr;
         for (int j = 0; j < jc->_numOfWorkers; ++j)
         {
-            if (!jc->_contexts[j]._mapRes.empty())
+            if (!jc->_contexts[j]->_mapRes.empty())
             {
-                K2 *currKey = jc->_contexts[j]._mapRes.back().first;
+                K2 *currKey = jc->_contexts[j]->_mapRes.back().first;
                 if (maxKey == nullptr || *maxKey < *currKey)
                 {
                     maxKey = currKey;
@@ -249,19 +307,19 @@ static void shuffle()
         for (int j = 0; j < jc->_numOfWorkers; ++j)
         {
             assert (maxKey != nullptr);
-            while (!jc->_contexts[j]._mapRes.empty() &&
-                   !(*maxKey < *(jc->_contexts[j]._mapRes.back().first)) &&
-                   !(*(jc->_contexts[j]._mapRes.back().first) < *maxKey))
+            while (!jc->_contexts[j]->_mapRes.empty() &&
+                   !(*maxKey < *(jc->_contexts[j]->_mapRes.back().first)) &&
+                   !(*(jc->_contexts[j]->_mapRes.back().first) < *maxKey))
             {
                 try{
-                    toReduce.push_back(jc->_contexts[j]._mapRes.back());
+                    toReduce.push_back(jc->_contexts[j]->_mapRes.back());
                 }
                 catch (std::bad_alloc &e)
                 {
                     std::cerr << "system error: couldn't add the pair to the toReduce vector." << std::endl;
                     exit(1);
                 }
-                jc->_contexts[j]._mapRes.pop_back();
+                jc->_contexts[j]->_mapRes.pop_back();
             }
         }
 
@@ -293,6 +351,7 @@ static void shuffle()
  */
 static void reduce(ThreadContext *tc)
 {
+    JobContext *jc = jobs[tc->_jid];
     while(!(jc->_doneShuffling && jc->_reducingQueue.empty()))
     {
 
@@ -310,13 +369,14 @@ static void reduce(ThreadContext *tc)
         unlock(&jc->_queueMutex);
 
         (jc->_client)->reduce(&pairs ,tc);
-        updateProcess(pairs.size(), &jc->_processMutex);
+        updateProcess(jc, pairs.size());
     }
 }
 
 static void* mapReduce(void *arg)
 {
     auto *tc = (ThreadContext *) arg;
+    JobContext *jc = jobs[tc->_jid];
 
     // ------mapSort:
     mapSort(tc);
@@ -324,37 +384,40 @@ static void* mapReduce(void *arg)
     // ------shuffle:
     if (tc->_id == shufflingThread)
     {
-        lock(&jc->_processMutex);
+        lock(&jc->_stateMutex);
 
         //critical code:
+
         jc->_stage = REDUCE_STAGE;
         jc->_numOfProcessedElements = 0;
 
-        unlock(&jc->_processMutex);
-        shuffle();
+        unlock(&jc->_stateMutex);
+        shuffle(tc);
         jc->_doneShuffling = true;
     }
-
     // ------reduce:
+
     reduce(tc);
+
+    return nullptr;
 }
 
 /**
  * This function creates the mapping threads and activate them.
  * @param multiThreadLevel
  */
-static void initThreads() {
-    pthread_t *threadIndex;
-    ThreadContext *contextIndex;
+static void initThreads(JobContext* jc) {
 
-    lock(&jc->_processMutex);
+    lock(&jc->_stateMutex);
     jc->_stage = MAP_STAGE;
-    unlock(&jc->_processMutex);
+    unlock(&jc->_stateMutex);
 
-    for (unsigned int i = 0; i < jc->_numOfWorkers; ++i) {
-        threadIndex = &((jc->_threads)[i]);
-        contextIndex = &((jc->_contexts)[i]);
-        if (pthread_create(threadIndex, nullptr, mapReduce, contextIndex))
+    for (int i = 0; i < jc->_numOfWorkers; ++i) {
+        //Initialize Threads contexts:
+        auto *tc = new ThreadContext(i, jc->_jid);
+        (jc->_contexts)[i] = tc;
+
+        if (pthread_create(&tc->_thread, nullptr, mapReduce, tc))
         {
             std::cerr << "Error using pthread_create, on thread " << i << std::endl;
             exit(1);
@@ -379,6 +442,9 @@ void emit2(K2 *key, V2 *value, void *context) {
 }
 
 void emit3(K3 *key, V3 *value, void *context) {
+    auto *tc = (ThreadContext *) context;
+    JobContext *jc = jobs[tc->_jid];
+
     // Converting context to the right type:
     lock(&jc->_outputMutex);
 
@@ -395,12 +461,12 @@ void emit3(K3 *key, V3 *value, void *context) {
 }
 
 void waitForJob(JobHandle job) {
-    auto *context = (JobContext *) job;
+    auto *jc = (JobContext *) job;
 
-    // If there are no elements to proceed the job is as good as done, and need no waiting for.
-    if(!context->_inputVec->empty()){
-        for (int i = 0; i < context->_numOfWorkers; ++i) {
-            if(pthread_join(jc->_threads[i], nullptr)){
+    // If there are no elements to proceed the job is as good as done, and needs no waiting for.
+    if(!jc->_inputVec->empty()){
+        for (int i = 0; i < jc->_numOfWorkers; ++i) {
+            if(pthread_join(jc->_contexts[i]->_thread, nullptr)){
                 std::cerr << "Error using pthread_join." << i << std::endl;
                 exit(1);
             }
@@ -409,34 +475,38 @@ void waitForJob(JobHandle job) {
 }
 
 void getJobState(JobHandle job, JobState *state) {
-    auto *context = (JobContext *) job;
-    if(!(context->_inputVec->empty())){
-        lock(&jc->_processMutex);
+    auto *jc = (JobContext *) job;
+    if(!(jc->_inputVec->empty())){
+        lock(&jc->_stateMutex);
 
         //critical code:
-        state->percentage = (float)(context->_numOfProcessedElements * (100.0 / context->_numOfElements));
-        state->stage = context->_stage;
+        state->percentage = (float)(jc->_numOfProcessedElements * (100.0 / jc->_numOfElements));
+        state->stage = jc->_stage;
 
-        unlock(&jc->_processMutex);
+        unlock(&jc->_stateMutex);
     }
 
     else {
         // If there are no elements to proceed, the job is good as done:
-        lock(&jc->_processMutex);
+        lock(&jc->_stateMutex);
 
         //critical code:
         state->percentage = 100;
         state->stage = REDUCE_STAGE;
 
-        unlock(&jc->_processMutex);
+        unlock(&jc->_stateMutex);
     }
 
 }
 
 void closeJobHandle(JobHandle job) {
-    auto *context = (JobContext *) job;
+    auto *jc = (JobContext *) job;
     waitForJob(job);
-    delete(context);
+
+    for(int i = 0; i < jc->_numOfWorkers ; ++i){
+        delete(jc->_contexts[i]);
+    }
+    delete(jc);
 }
 
 JobHandle startMapReduceJob(const MapReduceClient &client,
@@ -446,17 +516,27 @@ JobHandle startMapReduceJob(const MapReduceClient &client,
     assert(multiThreadLevel >= 0);
 
     //Initialize The JobContext:
-    jc = new JobContext(&client, &inputVec, &outputVec, multiThreadLevel);
+    auto * jc = new JobContext((int)jobs.size(), &client, &inputVec, &outputVec, multiThreadLevel);
+
+    //Add the new job to the job's vector:
+    lock(&jobsVecMutex);
+    try{
+        jobs.push_back(jc);
+    }
+    catch (std::bad_alloc &e)
+    {
+        std::cerr << "system error: couldn't add to the jobs vector." << std::endl;
+        exit(1);
+    }
+    unlock(&jobsVecMutex);
 
     if(!inputVec.empty()){
-        //Initialize contexts for the threads:
-        for (int i = 0; i < multiThreadLevel; ++i) {
-            ThreadContext context{i};
-            (jc->_contexts)[i] = context;
-        }
 
-        initThreads();
+        initThreads(jc);
+
     }
 
     return jc;
 }
+
+
