@@ -164,12 +164,11 @@ static void updateProcess(JobContext* jc, unsigned long processed)
 }
 
 
-//TODO: start document from HERE
 /**
  * Compares between two intermediate pairs.
- * @param p1
- * @param p2
- * @return
+ * @param p1: An object of an intermediate type.
+ * @param p2: An object of an intermediate type.
+ * @return: 1 if p2 > p1, and zero otherwise.
  */
 static bool intermediateComparator(const IntermediatePair& p1, const IntermediatePair& p2)
 {
@@ -179,45 +178,29 @@ static bool intermediateComparator(const IntermediatePair& p1, const Intermediat
 /**
  * This is the function each thread runs in the beginning of the Map-Reduce process. It handles the Map and Sort
  * stages, and locks the running thread until all of the rest have finished.
- * @param tc
+ * @param tc: A struct contains the inner state of a thread.
  */
-void mapSort(ThreadContext * tc)
-{
+static void* mapSort(ThreadContext * tc){
     JobContext *jc = jobs[tc->_jid];
     InputPair currPair;
     K1* currElmKey = nullptr;
     V1* currElmVal = nullptr;
-    bool notDone = false;
 
     // checks what is the index of the next element we should map:
-    lock(&jc->_inputMutex);
     unsigned int old_value = (jc->_atomicCounter)++;
-
-    if(old_value < (jc->_inputVec)->size()){
-        notDone = true;
-        currPair = (*(jc->_inputVec))[old_value];
-        currElmKey = currPair.first;
-        currElmVal = currPair.second;
-    }
-    unlock(&jc->_inputMutex);
+    currPair = (*(jc->_inputVec))[old_value];
+    currElmKey = currPair.first;
+    currElmVal = currPair.second;
 
     // While there are elements to map, map them and keep the results in mapRes.
-    while (notDone) {
+    while (old_value < (jc->_inputVec)->size()) {
         (jc->_client)->map(currElmKey, currElmVal, tc);
         updateProcess(jc, 1);
 
-        // Update JobState
-        lock(&jc->_inputMutex);
         old_value = (jc->_atomicCounter)++;
-        if(old_value < (jc->_inputVec)->size()){
-            notDone = true;
-            currPair = (*(jc->_inputVec))[old_value];
-            currElmKey = currPair.first;
-            currElmVal = currPair.second;
-        } else{
-            notDone = false;
-        }
-        unlock(&jc->_inputMutex);
+        currPair = (*(jc->_inputVec))[old_value];
+        currElmKey = currPair.first;
+        currElmVal = currPair.second;
     }
 
     // Sorts the elements in the result of the Map stage:
@@ -232,45 +215,13 @@ void mapSort(ThreadContext * tc)
 
     // Forces the thread to wait until all the others have finished the Sort phase.
     jc->_barrier.barrier();
-}
 
-//// TO BAR: This is a midwork version of the map without the lock. (not done and not tested yet)
-//static void* mapSort(ThreadContext * tc){
-//    JobContext *jc = jobs[tc->_jid];
-//    InputPair currPair;
-//    K1* currElmKey = nullptr;
-//    V1* currElmVal = nullptr;
-//
-//    // checks what is the index of the next element we should map:
-//    unsigned int old_value = (jc->_atomicCounter)++;
-//    currPair = (*(jc->_inputVec))[old_value];
-//    currElmKey = currPair.first;
-//    currElmVal = currPair.second;
-//
-//    // While there are elements to map, map them and keep the results in mapRes.
-//    while (old_value < (jc->_inputVec)->size()) {
-//        (jc->_client)->map(currElmKey, currElmVal, tc);
-//        updateProcess(jc, 1);
-//    }
-//
-//    // Sorts the elements in the result of the Map stage:
-//    try{
-//        std::sort(tc->_mapRes.begin(), tc->_mapRes.end(), intermediateComparator);
-//    }
-//    catch (std::bad_alloc &e)
-//    {
-//        std::cerr << "System Error: Sorting map results had failed." << std::endl;
-//        exit(1);
-//    }
-//
-//    // Forces the thread to wait until all the others have finished the Sort phase.
-//    jc->_barrier.barrier();
-//
-//    return 0;
-//}
+    return 0;
+}
 
 /**
  * The shuffling functionality
+ * @param tc A struct contains the inner data of a thread.
  */
 static void shuffle(ThreadContext* tc)
 {
@@ -348,6 +299,7 @@ static void shuffle(ThreadContext* tc)
 
 /**
  * The reducing functionality
+ * @param tc a struct contains the inner data of a thread.
  */
 static void reduce(ThreadContext *tc)
 {
@@ -373,6 +325,11 @@ static void reduce(ThreadContext *tc)
     }
 }
 
+/**
+ * This is the function that all of the threads of a job should run in order to preform the map reduce process.
+ * @param arg A struct contains the inner data of a thread.
+ * @return nullptr.
+ */
 static void* mapReduce(void *arg)
 {
     auto *tc = (ThreadContext *) arg;
@@ -404,7 +361,7 @@ static void* mapReduce(void *arg)
 
 /**
  * This function creates the mapping threads and activate them.
- * @param multiThreadLevel
+ * @param jc A struct contains the inner data of a job.
  */
 static void initThreads(JobContext* jc) {
 
@@ -426,6 +383,14 @@ static void initThreads(JobContext* jc) {
 }
 
 //--------------------------------------------------PUBLIC METHODS--------------------------------------------------//
+
+/**
+ * This function produces a (K2*,V2*) pair.The context can be used to get pointers into the framework’s variables and
+ * data structures.
+ * @param key: The key of an intermediate value.
+ * @param value: The value of an intermediate value.
+ * @param context: The context of the calling thread.
+ */
 void emit2(K2 *key, V2 *value, void *context) {
     // Converting context to the right type:
     auto *tc = (ThreadContext *) context;
@@ -441,6 +406,13 @@ void emit2(K2 *key, V2 *value, void *context) {
     }
 }
 
+/**
+ * This function produces a (K3*,V3*) pair.The context can be used to get pointers into the framework’s variables and
+ * data structures.
+ * @param key: The key of an intermediate value.
+ * @param value: The value of an intermediate value.
+ * @param context: The context of the calling thread.
+ */
 void emit3(K3 *key, V3 *value, void *context) {
     auto *tc = (ThreadContext *) context;
     JobContext *jc = jobs[tc->_jid];
@@ -540,3 +512,56 @@ JobHandle startMapReduceJob(const MapReduceClient &client,
 }
 
 
+// GRAVE YARD
+//void mapSort(ThreadContext * tc)
+//{
+//    JobContext *jc = jobs[tc->_jid];
+//    InputPair currPair;
+//    K1* currElmKey = nullptr;
+//    V1* currElmVal = nullptr;
+//    bool notDone = false;
+//
+//    // checks what is the index of the next element we should map:
+//    lock(&jc->_inputMutex);
+//    unsigned int old_value = (jc->_atomicCounter)++;
+//
+//    if(old_value < (jc->_inputVec)->size()){
+//        notDone = true;
+//        currPair = (*(jc->_inputVec))[old_value];
+//        currElmKey = currPair.first;
+//        currElmVal = currPair.second;
+//    }
+//    unlock(&jc->_inputMutex);
+//
+//    // While there are elements to map, map them and keep the results in mapRes.
+//    while (notDone) {
+//        (jc->_client)->map(currElmKey, currElmVal, tc);
+//        updateProcess(jc, 1);
+//
+//        // Update JobState
+//        lock(&jc->_inputMutex);
+//        old_value = (jc->_atomicCounter)++;
+//        if(old_value < (jc->_inputVec)->size()){
+//            notDone = true;
+//            currPair = (*(jc->_inputVec))[old_value];
+//            currElmKey = currPair.first;
+//            currElmVal = currPair.second;
+//        } else{
+//            notDone = false;
+//        }
+//        unlock(&jc->_inputMutex);
+//    }
+//
+//    // Sorts the elements in the result of the Map stage:
+//    try{
+//        std::sort(tc->_mapRes.begin(), tc->_mapRes.end(), intermediateComparator);
+//    }
+//    catch (std::bad_alloc &e)
+//    {
+//        std::cerr << "System Error: Sorting map results had failed." << std::endl;
+//        exit(1);
+//    }
+//
+//    // Forces the thread to wait until all the others have finished the Sort phase.
+//    jc->_barrier.barrier();
+//}
