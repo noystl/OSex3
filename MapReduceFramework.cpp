@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <cassert>
+#include <unordered_map>
 
 //-------------------------------------------- USEFUL STRUCTS --------------------------------------------------//
 
@@ -78,7 +79,11 @@ struct JobContext{
                         _numOfElements(inputVec->size()),_stage(UNDEFINED_STAGE),
                         _numOfProcessedElements(0), _doneShuffling(false),
                         _atomicCounter(0), _barrier(multiThreadLevel),
-                        _inputVec(inputVec), _outputVec(outputVec)
+                        _inputVec(inputVec), _outputVec(outputVec),
+                        _stateMutex(PTHREAD_MUTEX_INITIALIZER),
+                        _inputMutex(PTHREAD_MUTEX_INITIALIZER),
+                        _queueMutex(PTHREAD_MUTEX_INITIALIZER),
+                        _outputMutex(PTHREAD_MUTEX_INITIALIZER)
     {
 
         if (sem_init(&_queueSizeSem, 0, 0))
@@ -87,12 +92,6 @@ struct JobContext{
             exit(1);
         }
 
-        if (pthread_mutex_init(&_stateMutex, nullptr) || pthread_mutex_init(&_inputMutex, nullptr)
-            || pthread_mutex_init(&_queueMutex, nullptr) || pthread_mutex_init(&_outputMutex, nullptr))
-        {
-            std::cerr << "Error initializing Mutex." << std::endl;
-            exit(1);
-        }
     }
 
     /**
@@ -101,29 +100,32 @@ struct JobContext{
     ~JobContext()
     {
         sem_destroy(&_queueSizeSem);
-
-        if (pthread_mutex_destroy(&_stateMutex)|| pthread_mutex_destroy(&_inputMutex)||
-            pthread_mutex_destroy(&_queueMutex)|| pthread_mutex_destroy(&_outputMutex))
-        {
-            std::cerr << "Error destroying Mutex." << std::endl;
-            exit(1);
-        }
     }
 };
 
 
 
 //----------------------------------------------- STATIC GLOBALS ------------------------------------------------//
-/** holds the library's jobs*/
-static std::vector<JobContext*> jobs;
+/** next job Index */
+static unsigned int nextIndex(0);
 
-/** locks the job's vector */
+/** holds the library's jobs*/
+static std::unordered_map<unsigned int, JobContext*> jobs;
+
+/** locks the job's dictionary and index */
 static pthread_mutex_t jobsVecMutex = PTHREAD_MUTEX_INITIALIZER; // TODO: how to initialize safely? When to destroy? Should we destroy it?
 
 /** should be non-negative and < numOfThreads */
 static int shufflingThread = 0;
 
 //---------------------------------------------- STATIC FUNCTIONS ------------------------------------------------//
+
+/**
+ * Frees the of the map reduce
+ */
+static void freeLibMem(){
+
+}
 
 /**
  * Locks the desired mutex.
@@ -226,7 +228,7 @@ static void* mapSort(ThreadContext * tc){
 static void shuffle(ThreadContext* tc)
 {
 
-    JobContext *jc = jobs[tc->_jid];
+    JobContext *jc = jobs[tc->_jid]; // TODO sys error
     K2 *maxKey;
     IntermediateVec toReduce;
     unsigned int moreToGo = 0;
@@ -377,6 +379,9 @@ static void initThreads(JobContext* jc) {
         if (pthread_create(&tc->_thread, nullptr, mapReduce, tc))
         {
             std::cerr << "Error using pthread_create, on thread " << i << std::endl;
+
+            // TODO: Free memory and exit
+
             exit(1);
         }
     }
@@ -488,24 +493,27 @@ JobHandle startMapReduceJob(const MapReduceClient &client,
     assert(multiThreadLevel >= 0);
 
     //Initialize The JobContext:
-    auto * jc = new JobContext((int)jobs.size(), &client, &inputVec, &outputVec, multiThreadLevel);
+    JobContext * jc = new JobContext((int)jobs.size(), &client, &inputVec, &outputVec, multiThreadLevel);
 
     //Add the new job to the job's vector:
     lock(&jobsVecMutex);
+    unsigned int currIndex = (nextIndex)++;
+
     try{
-        jobs.push_back(jc);
+        jobs.insert({currIndex, jc});
+
+        //(std::pair<unsigned int, JobContext*>(currIndex, jc));
     }
     catch (std::bad_alloc &e)
     {
-        std::cerr << "system error: couldn't add to the jobs vector." << std::endl;
+        std::cerr << "system error: couldn't add the new job." << std::endl;
+        // TODO: Free memory and exit
         exit(1);
     }
     unlock(&jobsVecMutex);
 
     if(!inputVec.empty()){
-
         initThreads(jc);
-
     }
 
     return jc;
