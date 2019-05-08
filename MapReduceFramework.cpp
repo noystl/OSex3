@@ -421,8 +421,8 @@ static void initThreads(JobContext* jc) {
 /**
  * This function produces a (K2*,V2*) pair.The context can be used to get pointers into the framework’s variables and
  * data structures.
- * @param key: The key of an intermediate value.
- * @param value: The value of an intermediate value.
+ * @param key: The key of an intermediate element.
+ * @param value: The value of an intermediate element.
  * @param context: The context of the calling thread.
  */
 void emit2(K2 *key, V2 *value, void *context) {
@@ -443,8 +443,8 @@ void emit2(K2 *key, V2 *value, void *context) {
 /**
  * This function produces a (K3*,V3*) pair.The context can be used to get pointers into the framework’s variables and
  * data structures.
- * @param key: The key of an intermediate value.
- * @param value: The value of an intermediate value.
+ * @param key: The key of an output element.
+ * @param value: The value of an output element.
  * @param context: The context of the calling thread.
  */
 void emit3(K3 *key, V3 *value, void *context) {
@@ -483,6 +483,11 @@ void waitForJob(JobHandle job) {
     }
 }
 
+/**
+ * this function gets a job handle and check for his current state in a given JobState struct.
+ * @param job: A pointer to the job struct.
+ * @param state: A pointer to a state object to be filled with the current job's state.
+ */
 void getJobState(JobHandle job, JobState *state) {
     auto *jc = (JobContext *) job;
     if(!(jc->_inputVec->empty())){
@@ -508,6 +513,10 @@ void getJobState(JobHandle job, JobState *state) {
 
 }
 
+/**
+ * Releasing all resources of a job, after the job was done. After using this function the jobHandle will be invalid.
+ * @param job: A pointer to the job's context.
+ */
 void closeJobHandle(JobHandle job) {
     auto *jc = (JobContext *) job;
     waitForJob(job);
@@ -518,6 +527,14 @@ void closeJobHandle(JobHandle job) {
     delete(jc);
 }
 
+/**
+ * his function creates a new job, and starts running the MapReduce algorithm for it.
+ * @param client:  a map-reduce client.
+ * @param inputVec: A vector containing the input values.
+ * @param outputVec: A vector into which we insert the result of the map-reduce process.
+ * @param multiThreadLevel: The number of threads to participate in the map-reduce process.
+ * @return A job handler which is a pointer to the new job's context.
+ */
 JobHandle startMapReduceJob(const MapReduceClient &client,
                             const InputVec &inputVec, OutputVec &outputVec,
                             int multiThreadLevel) {
