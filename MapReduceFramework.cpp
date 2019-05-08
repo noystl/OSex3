@@ -49,6 +49,7 @@ struct JobContext{
     pthread_mutex_t _stateMutex;
 
     bool _doneShuffling;
+    bool _doneJob;
 
     std::atomic<unsigned int> _atomicCounter;
     Barrier _barrier;
@@ -76,7 +77,7 @@ struct JobContext{
                         _jid(jid),_contexts(multiThreadLevel),
                         _client(client), _numOfWorkers(multiThreadLevel),
                         _numOfElements(inputVec->size()),_stage(UNDEFINED_STAGE),
-                        _numOfProcessedElements(0), _doneShuffling(false),
+                        _numOfProcessedElements(0), _doneShuffling(false), _doneJob(false),
                         _atomicCounter(0), _barrier(multiThreadLevel),
                         _inputVec(inputVec), _outputVec(outputVec)
     {
@@ -180,27 +181,43 @@ static bool intermediateComparator(const IntermediatePair& p1, const Intermediat
  * stages, and locks the running thread until all of the rest have finished.
  * @param tc: A struct contains the inner state of a thread.
  */
-static void* mapSort(ThreadContext * tc){
+void mapSort(ThreadContext * tc)
+{
     JobContext *jc = jobs[tc->_jid];
     InputPair currPair;
     K1* currElmKey = nullptr;
     V1* currElmVal = nullptr;
+    bool notDone = false;
 
     // checks what is the index of the next element we should map:
+    lock(&jc->_inputMutex);
     unsigned int old_value = (jc->_atomicCounter)++;
-    currPair = (*(jc->_inputVec))[old_value];
-    currElmKey = currPair.first;
-    currElmVal = currPair.second;
 
-    // While there are elements to map, map them and keep the results in mapRes.
-    while (old_value < (jc->_inputVec)->size()) {
-        (jc->_client)->map(currElmKey, currElmVal, tc);
-        updateProcess(jc, 1);
-
-        old_value = (jc->_atomicCounter)++;
+    if(old_value < (jc->_inputVec)->size()){
+        notDone = true;
         currPair = (*(jc->_inputVec))[old_value];
         currElmKey = currPair.first;
         currElmVal = currPair.second;
+    }
+    unlock(&jc->_inputMutex);
+
+    // While there are elements to map, map them and keep the results in mapRes.
+    while (notDone) {
+        (jc->_client)->map(currElmKey, currElmVal, tc);
+        updateProcess(jc, 1);
+
+        // Update JobState
+        lock(&jc->_inputMutex);
+        old_value = (jc->_atomicCounter)++;
+        if(old_value < (jc->_inputVec)->size()){
+            notDone = true;
+            currPair = (*(jc->_inputVec))[old_value];
+            currElmKey = currPair.first;
+            currElmVal = currPair.second;
+        } else{
+            notDone = false;
+        }
+        unlock(&jc->_inputMutex);
     }
 
     // Sorts the elements in the result of the Map stage:
@@ -215,9 +232,10 @@ static void* mapSort(ThreadContext * tc){
 
     // Forces the thread to wait until all the others have finished the Sort phase.
     jc->_barrier.barrier();
-
-    return 0;
 }
+
+
+
 
 /**
  * The shuffling functionality
@@ -304,24 +322,40 @@ static void shuffle(ThreadContext* tc)
 static void reduce(ThreadContext *tc)
 {
     JobContext *jc = jobs[tc->_jid];
-    while(!(jc->_doneShuffling && jc->_reducingQueue.empty()))
+    while (!(jc->_doneShuffling && jc->_reducingQueue.empty()))
     {
-
         if (sem_wait(&jc->_queueSizeSem))
         {
             std::cerr << "Error using sem_wait." << std::endl;
             exit(1);
         }
-        lock(&jc->_queueMutex);
 
-        //critical code:
-        IntermediateVec pairs = jc->_reducingQueue.back();
-        jc->_reducingQueue.pop_back();
+        // after this thread awaken, check if there is still work to be done:
+        if (!(jc->_doneShuffling && jc->_reducingQueue.empty()))
+        {
+            lock(&jc->_queueMutex);
 
-        unlock(&jc->_queueMutex);
+            //critical code:
+            IntermediateVec pairs = jc->_reducingQueue.back();
+            jc->_reducingQueue.pop_back();
 
-        (jc->_client)->reduce(&pairs ,tc);
-        updateProcess(jc, pairs.size());
+            unlock(&jc->_queueMutex);
+
+            (jc->_client)->reduce(&pairs ,tc);
+            updateProcess(jc, pairs.size());
+
+            if (jc->_doneShuffling && jc->_reducingQueue.empty()) // if i hold the last vector to reduce:
+            {
+                // wake them all:
+                for (int i = 0 ; i < jc->_numOfWorkers ; ++i) {
+                    if (sem_post(&jc->_queueSizeSem)) {
+                        std::cerr << "Error using sem_post." << std::endl;
+                        exit(1);
+                    }
+                }
+
+            }
+        }
     }
 }
 
@@ -436,8 +470,11 @@ void waitForJob(JobHandle job) {
     auto *jc = (JobContext *) job;
 
     // If there are no elements to proceed the job is as good as done, and needs no waiting for.
-    if(!jc->_inputVec->empty()){
+    // If we called wait once (hence the job is done: don't wait)
+    if(!jc->_inputVec->empty() && !jc->_doneJob){
+        jc->_doneJob = true;
         for (int i = 0; i < jc->_numOfWorkers; ++i) {
+            std::cerr << "pthread_join on thread "<< i << std::endl;
             if(pthread_join(jc->_contexts[i]->_thread, nullptr)){
                 std::cerr << "Error using pthread_join." << i << std::endl;
                 exit(1);
@@ -513,43 +550,29 @@ JobHandle startMapReduceJob(const MapReduceClient &client,
 
 
 // GRAVE YARD
-//void mapSort(ThreadContext * tc)
-//{
+
+
+//static void* mapSort(ThreadContext * tc){
 //    JobContext *jc = jobs[tc->_jid];
 //    InputPair currPair;
 //    K1* currElmKey = nullptr;
 //    V1* currElmVal = nullptr;
-//    bool notDone = false;
 //
 //    // checks what is the index of the next element we should map:
-//    lock(&jc->_inputMutex);
 //    unsigned int old_value = (jc->_atomicCounter)++;
-//
-//    if(old_value < (jc->_inputVec)->size()){
-//        notDone = true;
-//        currPair = (*(jc->_inputVec))[old_value];
-//        currElmKey = currPair.first;
-//        currElmVal = currPair.second;
-//    }
-//    unlock(&jc->_inputMutex);
+//    currPair = (*(jc->_inputVec))[old_value];
+//    currElmKey = currPair.first;
+//    currElmVal = currPair.second;
 //
 //    // While there are elements to map, map them and keep the results in mapRes.
-//    while (notDone) {
+//    while (old_value < (jc->_inputVec)->size()) {
 //        (jc->_client)->map(currElmKey, currElmVal, tc);
 //        updateProcess(jc, 1);
 //
-//        // Update JobState
-//        lock(&jc->_inputMutex);
 //        old_value = (jc->_atomicCounter)++;
-//        if(old_value < (jc->_inputVec)->size()){
-//            notDone = true;
-//            currPair = (*(jc->_inputVec))[old_value];
-//            currElmKey = currPair.first;
-//            currElmVal = currPair.second;
-//        } else{
-//            notDone = false;
-//        }
-//        unlock(&jc->_inputMutex);
+//        currPair = (*(jc->_inputVec))[old_value];
+//        currElmKey = currPair.first;
+//        currElmVal = currPair.second;
 //    }
 //
 //    // Sorts the elements in the result of the Map stage:
@@ -564,4 +587,11 @@ JobHandle startMapReduceJob(const MapReduceClient &client,
 //
 //    // Forces the thread to wait until all the others have finished the Sort phase.
 //    jc->_barrier.barrier();
+//
+//    return 0;
 //}
+
+
+//
+
+
