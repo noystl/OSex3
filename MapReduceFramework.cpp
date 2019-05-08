@@ -1,4 +1,4 @@
-// TODO: We are exiting from a constructor - is that ok?
+//TODO: To solve the job indexing problem.
 
 #include <string>
 #include <iostream>
@@ -38,7 +38,7 @@ struct ThreadContext
  * This struct holds all parameters relevant to the job.
  */
 struct JobContext{
-    int _jid;
+    unsigned int _jid;
 
     std::vector<ThreadContext*> _contexts;
     const MapReduceClient* _client;
@@ -53,6 +53,7 @@ struct JobContext{
     bool _doneJob;
 
     std::atomic<unsigned int> _atomicCounter;
+    std::atomic<unsigned int> _firstToArrive;
     Barrier _barrier;
 
     const InputVec* _inputVec;
@@ -64,6 +65,7 @@ struct JobContext{
     pthread_mutex_t _outputMutex; //Used to lock the output vector
 
 
+
      /**
       * A constructor for the JobContext struct.
       * @param jid: the job's id
@@ -72,14 +74,14 @@ struct JobContext{
       * @param outputVec : the place for the job to output to.
       * @param multiThreadLevel: the job's multi thread level.
       */
-    JobContext(int jid, const MapReduceClient* client,
+    JobContext(unsigned int jid, const MapReduceClient* client,
                         const InputVec* inputVec, OutputVec* outputVec,
                         int multiThreadLevel):
                         _jid(jid),_contexts(multiThreadLevel),
                         _client(client), _numOfWorkers(multiThreadLevel),
                         _numOfElements(inputVec->size()),_stage(UNDEFINED_STAGE),
                         _numOfProcessedElements(0), _doneShuffling(false), _doneJob(false),
-                        _atomicCounter(0), _barrier(multiThreadLevel),
+                        _atomicCounter(0), _firstToArrive(0), _barrier(multiThreadLevel),
                         _inputVec(inputVec), _outputVec(outputVec),
                         _stateMutex(PTHREAD_MUTEX_INITIALIZER),
                         _inputMutex(PTHREAD_MUTEX_INITIALIZER),
@@ -114,19 +116,13 @@ static unsigned int nextIndex(0);
 static std::unordered_map<unsigned int, JobContext*> jobs;
 
 /** locks the job's dictionary and index */
-static pthread_mutex_t jobsVecMutex = PTHREAD_MUTEX_INITIALIZER; // TODO: how to initialize safely? When to destroy? Should we destroy it?
+static pthread_mutex_t jobsMutex = PTHREAD_MUTEX_INITIALIZER;
 
 /** should be non-negative and < numOfThreads */
 static int shufflingThread = 0;
 
 //---------------------------------------------- STATIC FUNCTIONS ------------------------------------------------//
 
-/**
- * Frees the of the map reduce
- */
-static void freeLibMem(){
-
-}
 
 /**
  * Locks the desired mutex.
@@ -246,7 +242,7 @@ void mapSort(ThreadContext * tc)
 static void shuffle(ThreadContext* tc)
 {
 
-    JobContext *jc = jobs[tc->_jid]; // TODO sys error
+    JobContext *jc = jobs[tc->_jid];
     K2 *maxKey;
     IntermediateVec toReduce;
     unsigned int moreToGo = 0;
@@ -335,6 +331,7 @@ static void reduce(ThreadContext *tc)
         // after this thread awaken, check if there is still work to be done:
         if (!(jc->_doneShuffling && jc->_reducingQueue.empty()))
         {
+
             lock(&jc->_queueMutex);
 
             //critical code:
@@ -346,16 +343,16 @@ static void reduce(ThreadContext *tc)
             (jc->_client)->reduce(&pairs ,tc);
             updateProcess(jc, pairs.size());
 
-            if (jc->_doneShuffling && jc->_reducingQueue.empty()) // if i hold the last vector to reduce:
-            {
-                // wake them all:
-                for (int i = 0 ; i < jc->_numOfWorkers ; ++i) {
-                    if (sem_post(&jc->_queueSizeSem)) {
-                        std::cerr << "Error using sem_post." << std::endl;
-                        exit(1);
-                    }
-                }
-
+        }
+    }
+    // wake them all:
+    unsigned int old_value = (jc->_firstToArrive)++;
+    if (!(old_value))
+    {
+        for (int i = 0 ; i < jc->_numOfWorkers ; ++i) {
+            if (sem_post(&jc->_queueSizeSem)) {
+                std::cerr << "Error using sem_post." << std::endl;
+                exit(1);
             }
         }
     }
@@ -413,9 +410,6 @@ static void initThreads(JobContext* jc) {
         if (pthread_create(&tc->_thread, nullptr, mapReduce, tc))
         {
             std::cerr << "Error using pthread_create, on thread " << i << std::endl;
-
-            // TODO: Free memory and exit
-
             exit(1);
         }
     }
@@ -479,7 +473,6 @@ void waitForJob(JobHandle job) {
     if(!jc->_inputVec->empty() && !jc->_doneJob){
         jc->_doneJob = true;
         for (int i = 0; i < jc->_numOfWorkers; ++i) {
-            std::cerr << "pthread_join on thread "<< i << std::endl;
             if(pthread_join(jc->_contexts[i]->_thread, nullptr)){
                 std::cerr << "Error using pthread_join." << i << std::endl;
                 exit(1);
@@ -547,24 +540,21 @@ JobHandle startMapReduceJob(const MapReduceClient &client,
     assert(multiThreadLevel >= 0);
 
     //Initialize The JobContext:
-    JobContext * jc = new JobContext((int)jobs.size(), &client, &inputVec, &outputVec, multiThreadLevel);
+    auto * jc = new JobContext((int)jobs.size(), &client, &inputVec, &outputVec, multiThreadLevel);
 
     //Add the new job to the job's vector:
-    lock(&jobsVecMutex);
+    lock(&jobsMutex);
     unsigned int currIndex = (nextIndex)++;
 
     try{
         jobs.insert({currIndex, jc});
-
-        //(std::pair<unsigned int, JobContext*>(currIndex, jc));
     }
     catch (std::bad_alloc &e)
     {
         std::cerr << "system error: couldn't add the new job." << std::endl;
-        // TODO: Free memory and exit
         exit(1);
     }
-    unlock(&jobsVecMutex);
+    unlock(&jobsMutex);
 
     if(!inputVec.empty()){
         initThreads(jc);
@@ -615,8 +605,6 @@ JobHandle startMapReduceJob(const MapReduceClient &client,
 //
 //    return 0;
 //}
-
-
 //
 
 

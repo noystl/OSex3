@@ -213,6 +213,102 @@
 //    Vint s13(7);
 //    Vint s14(8888);
 //
+//
+//
+//
+//
+//// Little Client
+///**
+// *
+// * @author: Hadas Jacobi, 2018.
+// *
+// * This client maps 14 ints to even or odd and sums both groups separately.
+// *
+// */
+//
+//#include "MapReduceFramework.h"
+//#include <cstdio>
+//#include <iostream>
+//#include <zconf.h>
+//
+//class Vint : public V1 {
+//public:
+//    explicit Vint(int content) : content(content) { }
+//    int content;
+//};
+//
+//class Kbool : public K2, public K3{
+//public:
+//    explicit Kbool(bool i) : key(i) { }
+//    virtual bool operator<(const K2 &other) const {
+//        return key < static_cast<const Kbool&>(other).key;
+//    }
+//    virtual bool operator<(const K3 &other) const {
+//        return key < static_cast<const Kbool&>(other).key;
+//    }
+//    bool key;
+//};
+//
+//class Vsum : public V2, public V3{
+//public:
+//    explicit Vsum(int sum) : sum(sum) { }
+//    int sum;
+//};
+//
+//
+//class modsumClient : public MapReduceClient {
+//public:
+//    // maps to even or odd
+//    void map(const K1* key, const V1* value, void* context) const {
+//        int c = static_cast<const Vint*>(value)->content;
+//        Kbool* k2;
+//        Vsum* v2 = new Vsum(c);
+//
+//        if(c % 2 == 0){
+//            k2 = new Kbool(0);
+//        } else {
+//            k2 = new Kbool(1);
+//        }
+//        emit2(k2, v2, context);
+//    }
+//
+//    // sums all evens and all odds
+//    virtual void reduce(const IntermediateVec* pairs, void* context) const {
+//        const bool key = static_cast<const Kbool*>(pairs->at(0).first)->key;
+//        int sum = 0;
+//        for(const IntermediatePair& pair: *pairs) {
+//            sum += static_cast<const Vsum*>(pair.second)->sum;
+//            delete pair.first;
+//            delete pair.second;
+//        }
+//        Kbool* k3 = new Kbool(key);
+//        Vsum* v3 = new Vsum(sum);
+//        emit3(k3, v3, context);
+//    }
+//};
+//
+//
+//int main(int argc, char** argv)
+//{
+//    modsumClient client;
+//    InputVec inputVec;
+//    OutputVec outputVec;
+//
+//    Vint s1(86532);
+//    Vint s2(657);
+//    Vint s3(5);
+//    Vint s4(546);
+//    Vint s5(54);
+//    Vint s6(7);
+//    Vint s7(8888);
+//    Vint s8(86532);
+//    Vint s9(657);
+//    Vint s10(5);
+//    Vint s11(546);
+//    Vint s12(54);
+//    Vint s13(7);
+//    Vint s14(8888);
+//
 //    inputVec.push_back({nullptr, &s1});
 //    inputVec.push_back({nullptr, &s2});
 //    inputVec.push_back({nullptr, &s3});
@@ -759,87 +855,87 @@
 
 
 //grids:
-#include <fstream>
-#include <iostream>
-#include "Tests/GridMapReduce.hpp"
-#include "MapReduceClient.h"
-#include "MapReduceFramework.h"
-
-
-#define NUM_THREADS 8
-
-
-void runSingleGrid(std::ifstream& ifs, std::ofstream& ofs)
-{
-    InputVec k1v1Pairs;
-
-    // create the input vector
-    int row = 1;
-    std::string line;
-    while (std::getline(ifs, line))
-    {
-        Index* k = new Index(row);
-        RowString* v = new RowString(line);
-        k1v1Pairs.push_back(InputPair(k, v));
-
-        row++;
-    }
-
-
-    // create MapReduceBase object
-    GridMapReduce gmr;
-
-    // let the framework do the magic
-    OutputVec shamans;
-    JobHandle job = startMapReduceJob(gmr, k1v1Pairs, shamans, NUM_THREADS);
-
-    closeJobHandle(job);
-
-    // writing results to file
-    for (auto it = shamans.begin(); it != shamans.end(); ++it)
-    {
-        GridPoint& point = *(GridPoint*) (it->first);
-        int value = ((GridPointVal*) it->second)->getValue();
-        ofs << point.getRow() << " " << point.getCol()
-            << " " << value << std::endl;
-    }
-
-}
-
-
-int main(int argc, char* argv[])
-{
-    if (argc < 2)
-    {
-        std::cerr << "Usage: GridShamansFinder <path/to/grid>" << std::endl;
-        return 1;
-    }
-
-    std::string gridPath(argv[1]);
-
-    std::ifstream ifs(gridPath);
-    std::ofstream ofs(gridPath + std::string("_test_results"),
-                      std::ofstream::out);
-
-    if (!ifs.is_open() || !ofs.is_open())
-    {
-        std::cerr << "I/O Error occurred - couldn't open input or output file"
-                  << std::endl;
-        return 0;
-    }
-
-
-    runSingleGrid(ifs, ofs);
-    ifs.close();
-    ofs.close();
-}
-
-
-
+//#include <fstream>
+//#include <iostream>
+//#include "Tests/GridMapReduce.hpp"
+//#include "MapReduceClient.h"
+//#include "MapReduceFramework.h"
+//
+//
+//#define NUM_THREADS 8
+//
+//
+//void runSingleGrid(std::ifstream& ifs, std::ofstream& ofs)
+//{
+//    InputVec k1v1Pairs;
+//
+//    // create the input vector
+//    int row = 1;
+//    std::string line;
+//    while (std::getline(ifs, line))
+//    {
+//        Index* k = new Index(row);
+//        RowString* v = new RowString(line);
+//        k1v1Pairs.push_back(InputPair(k, v));
+//
+//        row++;
+//    }
+//
+//
+//    // create MapReduceBase object
+//    GridMapReduce gmr;
+//
+//    // let the framework do the magic
+//    OutputVec shamans;
+//    JobHandle job = startMapReduceJob(gmr, k1v1Pairs, shamans, NUM_THREADS);
+//
+//    closeJobHandle(job);
+//
+//    // writing results to file
+//    for (auto it = shamans.begin(); it != shamans.end(); ++it)
+//    {
+//        GridPoint& point = *(GridPoint*) (it->first);
+//        int value = ((GridPointVal*) it->second)->getValue();
+//        ofs << point.getRow() << " " << point.getCol()
+//            << " " << value << std::endl;
+//    }
+//
+//}
+//
+//
+//int main(int argc, char* argv[])
+//{
+//    if (argc < 2)
+//    {
+//        std::cerr << "Usage: GridShamansFinder <path/to/grid>" << std::endl;
+//        return 1;
+//    }
+//
+//    std::string gridPath(argv[1]);
+//
+//    std::ifstream ifs(gridPath);
+//    std::ofstream ofs(gridPath + std::string("_test_results"),
+//                      std::ofstream::out);
+//
+//    if (!ifs.is_open() || !ofs.is_open())
+//    {
+//        std::cerr << "I/O Error occurred - couldn't open input or output file"
+//                  << std::endl;
+//        return 0;
+//    }
+//
+//
+//    runSingleGrid(ifs, ofs);
+//    ifs.close();
+//    ofs.close();
+//}
 
 
 
-///Scripts
+
+
+
+//Scripts
 //#include "WordFrequenciesClient.hpp"
 //#include <algorithm>
 //#include <zconf.h>
@@ -956,170 +1052,172 @@ int main(int argc, char* argv[])
 
 
 ////Test_2:
-//#include "MapReduceFramework.h"
-//#include <cstdio>
-//#include <string>
-//#include <array>
-//#include <fstream>
+#include "MapReduceFramework.h"
+#include <cstdio>
+#include <string>
+#include <array>
+#include <fstream>
+
+class VString : public V1 {
+public:
+    VString(std::string content) : content(content) {}
+
+    std::string content;
+};
+
+class KChar : public K2, public K3 {
+public:
+    KChar(char c) : c(c) {}
+
+    virtual bool operator<(const K2 &other) const {
+        return c < static_cast<const KChar &>(other).c;
+    }
+
+    virtual bool operator<(const K3 &other) const {
+        return c < static_cast<const KChar &>(other).c;
+    }
+
+    char c;
+};
+
+class VCount : public V2, public V3 {
+public:
+    VCount(int count) : count(count) {}
+
+    int count;
+};
+
+
+class CounterClient : public MapReduceClient {
+public:
+    void map(const K1 *key, const V1 *value, void *context) const {
+        std::array<int, 256> counts;
+        counts.fill(0);
+        for (const char &c : static_cast<const VString *>(value)->content) {
+            counts[(unsigned char) c]++;
+        }
+
+        for (int i = 0; i < 256; ++i) {
+            if (counts[i] == 0)
+                continue;
+
+            KChar *k2 = new KChar(i);
+            VCount *v2 = new VCount(counts[i]);
+            emit2(k2, v2, context);
+        }
+    }
+
+    virtual void reduce(const IntermediateVec *pairs,
+                        void *context) const {
+        const char c = static_cast<const KChar *>(pairs->at(0).first)->c;
+        int count = 0;
+        for (const IntermediatePair &pair: *pairs) {
+            count += static_cast<const VCount *>(pair.second)->count;
+            delete pair.first;
+            delete pair.second;
+        }
+        KChar *k3 = new KChar(c);
+        VCount *v3 = new VCount(count);
+        emit3(k3, v3, context);
+    }
+};
+
+typedef struct args {
+    CounterClient *client1;
+    InputVec *inputVec1;
+    OutputVec *outputVec1;
+    int num;
+};
+
+
+void *foo(void *arg) {
+    auto *arg1 = (args *) arg;
+    CounterClient *client = arg1->client1;
+    InputVec *inputVec = arg1->inputVec1;
+    OutputVec *outputVec = arg1->outputVec1;
+    int num = arg1->num;
+    auto job = startMapReduceJob(*client, *inputVec, *outputVec, num);
+    waitForJob(job);
+    return nullptr;
+};
+
+int main(int argc, char **argv) {
+    int files_num = (int) *(argv[1]) - 48;
+    pthread_t tids[files_num];
+    args arguments[files_num];
+    CounterClient *client;
+    client = new CounterClient();
+
+    for (int i = 0; i < files_num; ++i) {
+        InputVec *inputVec;
+        inputVec = new InputVec();
+        OutputVec *outputVec;
+        outputVec = new OutputVec();
+        std::string line;
+        std::string address = "/cs/usr/baraloni/Downloads/OSex3/Tests/text_gen/text_"+ std::to_string(i + 1);
+        std::ifstream input_file1(address);
+
+        while (std::getline(input_file1, line)) {
+
+            VString *s = new VString(line);
+            inputVec->push_back({nullptr, s});
+        }
+        arguments[i] = {client, inputVec, outputVec, 100};
+        pthread_create(&(tids[i]), NULL, foo, (void *) &(arguments[i]));
+
+    }
+
+
+//    CounterClient *client2;
+//    client2 = new CounterClient();
+//    InputVec *inputVec2;
+//    inputVec2 = new InputVec();
+//    OutputVec *outputVec2;
+//    outputVec2 = new OutputVec();
 //
-//class VString : public V1 {
-//public:
-//    VString(std::string content) : content(content) {}
+//    std::string line;
+//    std::ifstream input_file1("/home/michaelbere/Documents/OS/ex3/text_gen/text_1");
+//    std::ifstream input_file2("/home/michaelbere/Documents/OS/ex3/text_gen/text_2");
+//    inputVec2->reserve(10000);
 //
-//    std::string content;
-//};
-//
-//class KChar : public K2, public K3 {
-//public:
-//    KChar(char c) : c(c) {}
-//
-//    virtual bool operator<(const K2 &other) const {
-//        return c < static_cast<const KChar &>(other).c;
+//    while (std::getline(input_file2, line)) {
+//        VString *s = new VString(line);
+//        inputVec2->push_back({nullptr, s});
 //    }
 //
-//    virtual bool operator<(const K3 &other) const {
-//        return c < static_cast<const KChar &>(other).c;
+//
+//    args arg2 = {client2, inputVec2, outputVec2, 1};
+//    pthread_create(&tid2, NULL, foo, (void *) &arg2);
+//    runMapReduceFramework(client, inputVec, outputVec, 1);
+//    for (int j = 0; j < files_num; ++j) {
+//        pthread_join(tids[j], nullptr);
 //    }
-//
-//    char c;
-//};
-//
-//class VCount : public V2, public V3 {
-//public:
-//    VCount(int count) : count(count) {}
-//
-//    int count;
-//};
-//
-//
-//class CounterClient : public MapReduceClient {
-//public:
-//    void map(const K1 *key, const V1 *value, void *context) const {
-//        std::array<int, 256> counts;
-//        counts.fill(0);
-//        for (const char &c : static_cast<const VString *>(value)->content) {
-//            counts[(unsigned char) c]++;
-//        }
-//
-//        for (int i = 0; i < 256; ++i) {
-//            if (counts[i] == 0)
-//                continue;
-//
-//            KChar *k2 = new KChar(i);
-//            VCount *v2 = new VCount(counts[i]);
-//            emit2(k2, v2, context);
-//        }
+//    pthread_join(tid2, nullptr);
+    for (int k = 0; k < files_num; ++k) {
+        pthread_join(tids[k], nullptr);
+        printf("File %d:\n", k + 1);
+        for (OutputPair &pair: *(arguments[k].outputVec1)) {
+            char c = ((const KChar *) pair.first)->c;
+            int count = ((const VCount *) pair.second)->count;
+            printf("The character %c appeared %d time%s\n",
+                   c, count, count > 1 ? "s" : "");
+            delete pair.first;
+            delete pair.second;
+        }
+    }
+
+//    printf("File 2:\n");
+//    for (OutputPair &pair: *outputVec2) {
+//        char c = ((const KChar *) pair.first)->c;
+//        int count = ((const VCount *) pair.second)->count;
+//        printf("The character %c appeared %d time%s\n",
+//               c, count, count > 1 ? "s" : "");
+//        delete pair.first;
+//        delete pair.second;
 //    }
-//
-//    virtual void reduce(const IntermediateVec *pairs,
-//                        void *context) const {
-//        const char c = static_cast<const KChar *>(pairs->at(0).first)->c;
-//        int count = 0;
-//        for (const IntermediatePair &pair: *pairs) {
-//            count += static_cast<const VCount *>(pair.second)->count;
-//            delete pair.first;
-//            delete pair.second;
-//        }
-//        KChar *k3 = new KChar(c);
-//        VCount *v3 = new VCount(count);
-//        emit3(k3, v3, context);
-//    }
-//};
-//
-//typedef struct args {
-//    CounterClient *client1;
-//    InputVec *inputVec1;
-//    OutputVec *outputVec1;
-//    int num;
-//};
-//
-//
-//void *foo(void *arg) {
-//    auto *arg1 = (args *) arg;
-//    CounterClient *client = arg1->client1;
-//    InputVec *inputVec = arg1->inputVec1;
-//    OutputVec *outputVec = arg1->outputVec1;
-//    int num = arg1->num;
-//    auto job = startMapReduceJob(*client, *inputVec, *outputVec, num);
-//    waitForJob(job);
-//    return nullptr;
-//};
-//
-//int main(int argc, char **argv) {
-//    int files_num = (int) *(argv[1]) - 48;
-//    pthread_t tids[files_num];
-//    args arguments[files_num];
-//    CounterClient *client;
-//    client = new CounterClient();
-//
-//    for (int i = 0; i < files_num; ++i) {
-//        InputVec *inputVec;
-//        inputVec = new InputVec();
-//        OutputVec *outputVec;
-//        outputVec = new OutputVec();
-//        std::string line;
-//        std::string address = "/cs/usr/baraloni/Downloads/OSex3/Tests/text_gen/text_" + std::to_string(i + 1);
-//        std::ifstream input_file1(address);
-//        while (std::getline(input_file1, line)) {
-//            VString *s = new VString(line);
-//            inputVec->push_back({nullptr, s});
-//        }
-//        arguments[i] = {client, inputVec, outputVec, 100};
-//        pthread_create(&(tids[i]), NULL, foo, (void *) &(arguments[i]));
-//
-//    }
-//
-//
-////    CounterClient *client2;
-////    client2 = new CounterClient();
-////    InputVec *inputVec2;
-////    inputVec2 = new InputVec();
-////    OutputVec *outputVec2;
-////    outputVec2 = new OutputVec();
-////
-////    std::string line;
-////    std::ifstream input_file1("/home/michaelbere/Documents/OS/ex3/text_gen/text_1");
-////    std::ifstream input_file2("/home/michaelbere/Documents/OS/ex3/text_gen/text_2");
-////    inputVec2->reserve(10000);
-////
-////    while (std::getline(input_file2, line)) {
-////        VString *s = new VString(line);
-////        inputVec2->push_back({nullptr, s});
-////    }
-////
-////
-////    args arg2 = {client2, inputVec2, outputVec2, 1};
-////    pthread_create(&tid2, NULL, foo, (void *) &arg2);
-////    runMapReduceFramework(client, inputVec, outputVec, 1);
-////    for (int j = 0; j < files_num; ++j) {
-////        pthread_join(tids[j], nullptr);
-////    }
-////    pthread_join(tid2, nullptr);
-//    for (int k = 0; k < files_num; ++k) {
-//        pthread_join(tids[k], nullptr);
-//        printf("File %d:\n", k + 1);
-//        for (OutputPair &pair: *(arguments[k].outputVec1)) {
-//            char c = ((const KChar *) pair.first)->c;
-//            int count = ((const VCount *) pair.second)->count;
-//            printf("The character %c appeared %d time%s\n",
-//                   c, count, count > 1 ? "s" : "");
-//            delete pair.first;
-//            delete pair.second;
-//        }
-//    }
-//
-////    printf("File 2:\n");
-////    for (OutputPair &pair: *outputVec2) {
-////        char c = ((const KChar *) pair.first)->c;
-////        int count = ((const VCount *) pair.second)->count;
-////        printf("The character %c appeared %d time%s\n",
-////               c, count, count > 1 ? "s" : "");
-////        delete pair.first;
-////        delete pair.second;
-////    }
-//
-//    return 0;
-//}
+
+    return 0;
+}
 
 
 
@@ -1127,11 +1225,18 @@ int main(int argc, char* argv[])
 
 
 
-////Tarantino:
+
+
+
+
+
+
+//Tarantino:
 ///**
 // * See README file.
 // */
-
+//#include "MapReduceClient.h"
+//#include "MapReduceFramework.h"
 //#include "WordFrequenciesClient.hpp"
 //#include <algorithm>
 //#include <zconf.h>
@@ -1305,7 +1410,7 @@ int main(int argc, char* argv[])
 //        {
 //            job->reportChange();
 //        }
-//        usleep(REPORT_FREQ_MS * 1000);
+//        usleep(REPORT_FREQ_MS * 10);
 //    }
 //
 //    // Make sure everyone is dead
